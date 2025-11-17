@@ -1,33 +1,27 @@
-// utils/sendEmail.js
-const nodemailer = require('nodemailer');
+const nodemailer = require("nodemailer");
 
-if (!process.env.GMAIL_APP_PASSWORD) {
-  console.warn('⚠️ GMAIL_APP_PASSWORD not set. Emails will fail until you set it.');
-}
-
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: 'rentify085@gmail.com',
-    pass: process.env.GMAIL_APP_PASSWORD // must be Gmail App Password (16 chars)
-  }
-});
-
-async function sendEmail(to, subject, htmlOrText) {
+const sendEmail = async (to, subject, html) => {
   try {
-    const info = await transporter.sendMail({
-      from: '"Rentify App" <rentify085@gmail.com>',
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USERNAME,  // rentify085@gmail.com
+        pass: process.env.GMAIL_APP_PASSWORD,
+      },
+    });
+
+    await transporter.sendMail({
+      from: `"Rentify Support" <${process.env.EMAIL_USERNAME}>`,
       to,
       subject,
-      // permit either html or text; if html passed it will render
-      html: htmlOrText,
+      html,
     });
-    console.log('✉️ Email sent:', info?.messageId || info);
-    return info;
-  } catch (err) {
-    console.error('❌ sendEmail error:', err);
-    throw err;
+
+    console.log(`📩 Email sent to: ${to}`);
+  } catch (error) {
+    console.error("❌ Email send error:", error);
+    throw error;
   }
-}
+};
 
 module.exports = sendEmail;
