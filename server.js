@@ -11,25 +11,24 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
+// ------------------- Middleware -------------------
 app.use(cors());
 app.use(express.json());
 
-// Routes - payment (keep as you had)
+// ------------------- Routes -------------------
 const paymentRoutes = require('./routes/payment');
 app.use('/api/payments', paymentRoutes);
 
-// Auth routes (OTP / reset password / verify)
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 
-// MongoDB Connection (modern driver: no deprecated options)
+// ------------------- MongoDB Connection -------------------
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log('✅ Connected to MongoDB'))
   .catch((err) => console.error('❌ MongoDB connection error:', err));
 
-// Cloudinary Configuration
+// ------------------- Cloudinary Configuration -------------------
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -37,25 +36,27 @@ cloudinary.config({
 });
 console.log('✅ Cloudinary configured:', process.env.CLOUDINARY_CLOUD_NAME);
 
-// ------------------- Schemas (keep property model here if you want) -------------------
-
-// Property Schema
+// ------------------- Property Schema -------------------
 const propertySchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
     location: { type: String, required: true },
     price: { type: String, required: true },
     type: { type: String, required: true },
+
     bhk: String,
     beds: Number,
     amenities: [String],
     description: { type: String, required: true },
+
     address: String,
     city: String,
     state: String,
     zipCode: String,
+
     ownerId: { type: String, required: true },
     images: [String],
+
     rating: { type: Number, default: 4.5 },
     isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
@@ -73,12 +74,13 @@ const upload = multer({
     const filetypes = /jpeg|jpg|png|webp/;
     const mimetype = filetypes.test(file.mimetype);
     const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+
     if (mimetype && extname) return cb(null, true);
     cb(new Error('Only images are allowed'));
   },
 });
 
-// ------------------- Cloudinary Helper -------------------
+// ------------------- Cloudinary Upload Helper -------------------
 async function uploadToCloudinary(filePath) {
   try {
     const result = await cloudinary.uploader.upload(filePath, {
@@ -88,6 +90,7 @@ async function uploadToCloudinary(filePath) {
         { quality: 'auto' },
       ],
     });
+
     fs.unlinkSync(filePath);
     return result.secure_url;
   } catch (error) {
@@ -96,9 +99,7 @@ async function uploadToCloudinary(filePath) {
   }
 }
 
-// ------------------- Property Routes (example) -------------------
-// Keep or move these to a separate routes file if you prefer.
-
+// ------------------- Property Upload Route -------------------
 app.post('/api/properties', upload.array('images', 10), async (req, res) => {
   try {
     const {
@@ -118,6 +119,7 @@ app.post('/api/properties', upload.array('images', 10), async (req, res) => {
     } = req.body;
 
     const imageUrls = [];
+
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
         const url = await uploadToCloudinary(file.path);
@@ -143,23 +145,34 @@ app.post('/api/properties', upload.array('images', 10), async (req, res) => {
     });
 
     await property.save();
-    res.status(201).json({ success: true, message: 'Property created successfully', data: property });
+
+    res.status(201).json({
+      success: true,
+      message: 'Property created successfully',
+      data: property,
+    });
   } catch (error) {
     console.error(error);
-    // clean up
+
+    // Cleanup on error
     if (req.files) {
       req.files.forEach((f) => {
         if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
       });
     }
-    res.status(500).json({ success: false, message: 'Failed to create property', error: error.message });
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create property',
+      error: error.message,
+    });
   }
 });
 
 // ------------------- Uploads Directory -------------------
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
 
-// Start
+// ------------------- Start Server -------------------
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📍 API available at http://localhost:${PORT}`);
