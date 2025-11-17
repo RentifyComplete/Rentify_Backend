@@ -5,16 +5,17 @@ const cloudinary = require('cloudinary').v2;
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware - MUST come BEFORE routes
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Routes - NOW payment routes will have access to middleware
+// Routes - payment
 const paymentRoutes = require('./routes/payment');
 app.use('/api/payments', paymentRoutes);
 
@@ -32,8 +33,9 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
-
 console.log('✅ Cloudinary configured:', process.env.CLOUDINARY_CLOUD_NAME);
+
+// ------------------- Schemas -------------------
 
 // Property Schema
 const propertySchema = new mongoose.Schema({
@@ -58,7 +60,25 @@ const propertySchema = new mongoose.Schema({
 
 const Property = mongoose.model('Property', propertySchema, 'properties');
 
-// Multer configuration for temporary storage
+// User Schema
+const userSchema = new mongoose.Schema({
+  name: String,
+  email: { type: String, required: true, unique: true },
+  password: String, // hashed password
+}, { timestamps: true });
+
+const User = mongoose.model('User', userSchema, 'users');
+
+// OTP Schema
+const otpSchema = new mongoose.Schema({
+  email: { type: String, required: true },
+  code: { type: String, required: true },
+  expiresAt: { type: Date, required: true },
+}, { timestamps: true });
+
+const OTP = mongoose.model('OTP', otpSchema, 'otps');
+
+// ------------------- Multer -------------------
 const upload = multer({ 
   dest: 'uploads/',
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -66,15 +86,12 @@ const upload = multer({
     const filetypes = /jpeg|jpg|png|webp/;
     const mimetype = filetypes.test(file.mimetype);
     const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-    
-    if (mimetype && extname) {
-      return cb(null, true);
-    }
+    if (mimetype && extname) return cb(null, true);
     cb(new Error('Only images are allowed'));
   }
 });
 
-// Helper function to upload to Cloudinary
+// ------------------- Cloudinary Helper -------------------
 async function uploadToCloudinary(filePath) {
   try {
     const result = await cloudinary.uploader.upload(filePath, {
@@ -84,10 +101,7 @@ async function uploadToCloudinary(filePath) {
         { quality: 'auto' }
       ]
     });
-    
-    // Delete local file after upload
     fs.unlinkSync(filePath);
-    
     return result.secure_url;
   } catch (error) {
     console.error('❌ Cloudinary upload error:', error);
@@ -95,7 +109,16 @@ async function uploadToCloudinary(filePath) {
   }
 }
 
-// Routes
+// ------------------- Nodemailer Setup -------------------
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'rentify085@gmail.com',
+    pass: process.env.GMAIL_APP_PASSWORD,
+  }
+});
+
+// ------------------- Routes -------------------
 
 // Health check
 app.get('/health', (req, res) => {
@@ -106,250 +129,94 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Create Property with Cloudinary Images
+// ------------------- SEND OTP -------------------
+app.post('/api/send-reset-otp', async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) return res.status(400).json({ success: false, message: 'Email is required' });
+
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ success: false, message: 'Email not found' });
+
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes expiry
+
+    // Save OTP in DB
+    await OTP.create({ email, code: otpCode, expiresAt });
+
+    // Send email
+    await transporter.sendMail({
+      from: '"Rentify App" <rentify085@gmail.com>',
+      to: email,
+      subject: 'Your Rentify Password Reset OTP',
+      html: `<p>Your OTP for password reset is: <b>${otpCode}</b></p>`
+    });
+
+    console.log(`✅ OTP sent to ${email}: ${otpCode}`);
+    res.json({ success: true, message: 'OTP sent to your email' });
+
+  } catch (error) {
+    console.error('❌ Error sending OTP:', error);
+    res.status(500).json({ success: false, message: 'Failed to send OTP', error: error.message });
+  }
+});
+
+// ------------------- VERIFY OTP -------------------
+app.post('/api/verify-otp', async (req, res) => {
+  const { email, code } = req.body;
+
+  if (!email || !code) return res.status(400).json({ success: false, message: 'Email and OTP are required' });
+
+  try {
+    const otpEntry = await OTP.findOne({ email, code }).sort({ createdAt: -1 });
+
+    if (!otpEntry) return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    if (otpEntry.expiresAt < new Date()) return res.status(400).json({ success: false, message: 'OTP expired' });
+
+    // OTP is valid, delete it from DB
+    await OTP.deleteOne({ _id: otpEntry._id });
+
+    res.json({ success: true, message: 'OTP verified successfully' });
+
+  } catch (error) {
+    console.error('❌ Error verifying OTP:', error);
+    res.status(500).json({ success: false, message: 'Failed to verify OTP', error: error.message });
+  }
+});
+
+// ------------------- Property Routes -------------------
+
+// Create Property
 app.post('/api/properties', upload.array('images', 10), async (req, res) => {
   try {
-    console.log('📤 Received property submission');
-    console.log('📷 Number of images:', req.files?.length || 0);
+    const { title, location, price, type, bhk, beds, amenities, description, address, city, state, zipCode, ownerId } = req.body;
 
-    const {
-      title,
-      location,
-      price,
-      type,
-      bhk,
-      beds,
-      amenities,
-      description,
-      address,
-      city,
-      state,
-      zipCode,
-      ownerId,
-    } = req.body;
-
-    // Upload images to Cloudinary
     const imageUrls = [];
-    
     if (req.files && req.files.length > 0) {
-      console.log('☁️  Uploading images to Cloudinary...');
-      
-      for (let i = 0; i < req.files.length; i++) {
-        const file = req.files[i];
-        console.log(`   Uploading image ${i + 1}/${req.files.length}...`);
-        
-        try {
-          const url = await uploadToCloudinary(file.path);
-          imageUrls.push(url);
-          console.log(`   ✅ Image ${i + 1} uploaded`);
-        } catch (error) {
-          console.error(`   ❌ Failed to upload image ${i + 1}:`, error);
-        }
+      for (const file of req.files) {
+        const url = await uploadToCloudinary(file.path);
+        imageUrls.push(url);
       }
     }
-    
-    console.log('🖼️  Total images uploaded:', imageUrls.length);
 
     const property = new Property({
-      title,
-      location,
-      price,
-      type,
-      bhk,
-      beds: beds ? parseInt(beds) : undefined,
+      title, location, price, type, bhk, beds: beds ? parseInt(beds) : undefined,
       amenities: typeof amenities === 'string' ? JSON.parse(amenities) : amenities,
-      description,
-      address,
-      city,
-      state,
-      zipCode,
-      ownerId,
-      images: imageUrls,
+      description, address, city, state, zipCode, ownerId, images: imageUrls
     });
 
     await property.save();
-    
-    console.log('✅ Property created:', property._id);
-    res.status(201).json({
-      success: true,
-      message: 'Property created successfully',
-      data: property,
-    });
+    res.status(201).json({ success: true, message: 'Property created successfully', data: property });
+
   } catch (error) {
-    console.error('❌ Error creating property:', error);
-    
-    // Clean up uploaded files if there's an error
-    if (req.files) {
-      req.files.forEach(file => {
-        if (fs.existsSync(file.path)) {
-          fs.unlinkSync(file.path);
-        }
-      });
-    }
-    
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create property',
-      error: error.message,
-    });
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Failed to create property', error: error.message });
   }
 });
 
-// Get All Properties
-app.get('/api/properties', async (req, res) => {
-  try {
-    const properties = await Property.find({ isActive: true })
-      .sort({ createdAt: -1 });
-    
-    console.log(`📦 Fetched ${properties.length} properties`);
-    
-    res.json({
-      success: true,
-      count: properties.length,
-      data: properties,
-    });
-  } catch (error) {
-    console.error('❌ Error fetching properties:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch properties',
-      error: error.message,
-    });
-  }
-});
-
-// Get Property by ID
-app.get('/api/properties/:id', async (req, res) => {
-  try {
-    const property = await Property.findById(req.params.id);
-    
-    if (!property) {
-      return res.status(404).json({
-        success: false,
-        message: 'Property not found',
-      });
-    }
-    
-    res.json({
-      success: true,
-      data: property,
-    });
-  } catch (error) {
-    console.error('❌ Error fetching property:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch property',
-      error: error.message,
-    });
-  }
-});
-
-// Get Properties by Owner
-app.get('/api/properties/owner/:ownerId', async (req, res) => {
-  try {
-    const properties = await Property.find({ 
-      ownerId: req.params.ownerId,
-      isActive: true 
-    }).sort({ createdAt: -1 });
-    
-    res.json({
-      success: true,
-      count: properties.length,
-      data: properties,
-    });
-  } catch (error) {
-    console.error('❌ Error fetching owner properties:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch properties',
-      error: error.message,
-    });
-  }
-});
-
-// Update Property
-app.put('/api/properties/:id', upload.array('images', 10), async (req, res) => {
-  try {
-    const updates = { ...req.body };
-    
-    // If new images uploaded, upload to Cloudinary
-    if (req.files && req.files.length > 0) {
-      const imageUrls = [];
-      
-      for (const file of req.files) {
-        try {
-          const url = await uploadToCloudinary(file.path);
-          imageUrls.push(url);
-        } catch (error) {
-          console.error('Failed to upload image:', error);
-        }
-      }
-      
-      updates.images = imageUrls;
-    }
-
-    const property = await Property.findByIdAndUpdate(
-      req.params.id,
-      { $set: updates },
-      { new: true }
-    );
-    
-    if (!property) {
-      return res.status(404).json({
-        success: false,
-        message: 'Property not found',
-      });
-    }
-    
-    res.json({
-      success: true,
-      message: 'Property updated successfully',
-      data: property,
-    });
-  } catch (error) {
-    console.error('❌ Error updating property:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update property',
-      error: error.message,
-    });
-  }
-});
-
-// Delete Property (Soft delete)
-app.delete('/api/properties/:id', async (req, res) => {
-  try {
-    const property = await Property.findByIdAndUpdate(
-      req.params.id,
-      { isActive: false },
-      { new: true }
-    );
-    
-    if (!property) {
-      return res.status(404).json({
-        success: false,
-        message: 'Property not found',
-      });
-    }
-    
-    res.json({
-      success: true,
-      message: 'Property deleted successfully',
-    });
-  } catch (error) {
-    console.error('❌ Error deleting property:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to delete property',
-      error: error.message,
-    });
-  }
-});
-
-// Create uploads directory if it doesn't exist
-if (!fs.existsSync('uploads')) {
-  fs.mkdirSync('uploads');
-}
+// ------------------- Uploads Directory -------------------
+if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
