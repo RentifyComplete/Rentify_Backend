@@ -9,11 +9,35 @@ const path = require('path');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3001;
 
 // ------------------- Middleware -------------------
 app.use(cors());
 app.use(express.json());
+
+// ------------------- Request Logger (DEBUG) -------------------
+app.use((req, res, next) => {
+  console.log(`📥 ${req.method} ${req.url}`);
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+  next();
+});
+
+// ------------------- Health Check Route -------------------
+app.get('/', (req, res) => {
+  res.json({ 
+    success: true,
+    message: 'Rentify API is running',
+    timestamp: new Date().toISOString(),
+    routes: [
+      'GET /',
+      'POST /api/auth/send-reset-otp',
+      'POST /api/auth/verify-otp',
+      'POST /api/auth/reset-password',
+      'POST /api/properties',
+      'POST /api/payments/*'
+    ]
+  });
+});
 
 // ------------------- Routes -------------------
 const paymentRoutes = require('./routes/payment');
@@ -169,6 +193,32 @@ app.post('/api/properties', upload.array('images', 10), async (req, res) => {
   }
 });
 
+// ------------------- 404 Handler -------------------
+app.use((req, res) => {
+  console.log(`❌ 404 - Route not found: ${req.method} ${req.url}`);
+  res.status(404).json({
+    success: false,
+    message: `Cannot ${req.method} ${req.url}`,
+    availableRoutes: [
+      'GET /',
+      'POST /api/auth/send-reset-otp',
+      'POST /api/auth/verify-otp',
+      'POST /api/auth/reset-password',
+      'POST /api/properties'
+    ]
+  });
+});
+
+// ------------------- Error Handler -------------------
+app.use((err, req, res, next) => {
+  console.error('❌ Error:', err);
+  res.status(500).json({
+    success: false,
+    message: 'Internal server error',
+    error: err.message
+  });
+});
+
 // ------------------- Uploads Directory -------------------
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
 
@@ -176,4 +226,6 @@ if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📍 API available at http://localhost:${PORT}`);
+  console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`📧 Email configured: ${process.env.EMAIL_USERNAME ? 'Yes' : 'No'}`);
 });
