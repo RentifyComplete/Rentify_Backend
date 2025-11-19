@@ -1,4 +1,4 @@
-// models/User.js
+// models/User.js - UPDATED with Bank Details & Razorpay Fields
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
@@ -26,22 +26,53 @@ const userSchema = new mongoose.Schema({
     minlength: [6, 'Password must be at least 6 characters']
   },
 
-  // User type (if needed)
+  // User type
   userType: {
     type: String,
     enum: ['tenant', 'owner', 'admin'],
     default: 'tenant'
   },
 
-  // Phone number (optional)
+  // Phone number
   phone: {
     type: String,
     trim: true
   },
 
-  // Profile image (optional)
+  // Profile image
   profileImage: {
     type: String
+  },
+
+  // ⭐ NEW: Bank Details for Property Owners (for Razorpay Route)
+  bankDetails: {
+    accountNumber: {
+      type: String,
+      trim: true
+    },
+    ifsc: {
+      type: String,
+      uppercase: true,
+      trim: true
+    },
+    accountHolderName: {
+      type: String,
+      trim: true
+    },
+    verifiedAt: {
+      type: Date
+    }
+  },
+
+  // ⭐ NEW: Razorpay Integration Fields
+  razorpayContactId: {
+    type: String,
+    trim: true
+  },
+  
+  razorpayFundAccountId: {
+    type: String,
+    trim: true
   },
 
   // Account status
@@ -80,23 +111,36 @@ const userSchema = new mongoose.Schema({
   lockUntil: {
     type: Date
   }
-
 }, { 
-  timestamps: true // Adds createdAt and updatedAt automatically
+  timestamps: true
 });
 
 // Indexes for better query performance
 userSchema.index({ email: 1 });
 userSchema.index({ createdAt: -1 });
+userSchema.index({ razorpayFundAccountId: 1 });
 
 // Virtual field to check if account is locked
 userSchema.virtual('isLocked').get(function() {
   return !!(this.lockUntil && this.lockUntil > Date.now());
 });
 
+// Virtual field to check if bank details are complete
+userSchema.virtual('hasBankDetails').get(function() {
+  return !!(
+    this.bankDetails?.accountNumber && 
+    this.bankDetails?.ifsc && 
+    this.bankDetails?.accountHolderName
+  );
+});
+
+// Virtual field to check if Razorpay is set up
+userSchema.virtual('hasRazorpaySetup').get(function() {
+  return !!(this.razorpayContactId && this.razorpayFundAccountId);
+});
+
 // Method to increment failed login attempts
 userSchema.methods.incrementLoginAttempts = function() {
-  // If we have a previous lock that has expired, restart at 1
   if (this.lockUntil && this.lockUntil < Date.now()) {
     return this.updateOne({
       $set: { failedLoginAttempts: 1 },
@@ -104,13 +148,11 @@ userSchema.methods.incrementLoginAttempts = function() {
     });
   }
   
-  // Otherwise, increment
   const updates = { $inc: { failedLoginAttempts: 1 } };
-  
-  // Lock the account if we've reached max attempts (5)
   const maxAttempts = 5;
+  
   if (this.failedLoginAttempts + 1 >= maxAttempts) {
-    updates.$set = { lockUntil: Date.now() + 2 * 60 * 60 * 1000 }; // 2 hour lock
+    updates.$set = { lockUntil: Date.now() + 2 * 60 * 60 * 1000 };
   }
   
   return this.updateOne(updates);
@@ -133,7 +175,7 @@ userSchema.pre('save', function(next) {
   next();
 });
 
-// Static method to clean up all expired OTPs (can be run periodically)
+// Static method to clean up all expired OTPs
 userSchema.statics.cleanupExpiredOTPs = async function() {
   try {
     const result = await this.updateMany(
@@ -147,7 +189,7 @@ userSchema.statics.cleanupExpiredOTPs = async function() {
   }
 };
 
-// Method to sanitize user data before sending to client (remove sensitive fields)
+// Method to sanitize user data before sending to client
 userSchema.methods.toJSON = function() {
   const userObject = this.toObject();
   
@@ -158,6 +200,12 @@ userSchema.methods.toJSON = function() {
   delete userObject.failedLoginAttempts;
   delete userObject.lockUntil;
   delete userObject.__v;
+  
+  // ⭐ Only show partial bank account number for security
+  if (userObject.bankDetails?.accountNumber) {
+    const accNum = userObject.bankDetails.accountNumber;
+    userObject.bankDetails.accountNumber = 'XXXX' + accNum.slice(-4);
+  }
   
   return userObject;
 };
