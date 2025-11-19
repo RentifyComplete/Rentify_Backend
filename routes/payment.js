@@ -8,7 +8,7 @@ const express = require('express');
 const router = express.Router();
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
-const User = require('../models/User'); // Adjust path as needed
+const User = require('../models/user'); // Adjust path as needed
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
