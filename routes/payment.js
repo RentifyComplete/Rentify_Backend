@@ -1,7 +1,14 @@
+// ========================================
+// COMPLETE BACKEND PAYMENT ROUTES
+// File: routes/payments.js
+// Supports both Owner Service Charge & Tenant Rent Payment with Auto-Transfer
+// ========================================
+
 const express = require('express');
 const router = express.Router();
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
+const User = require('../models/User'); // Adjust path as needed
 
 // Initialize Razorpay
 const razorpay = new Razorpay({
@@ -9,47 +16,179 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// Calculate service charge based on property type
+// ========================================
+// HELPER FUNCTIONS
+// ========================================
+
+// Calculate service charge for property owners (₹18 per bed/bhk)
 function calculateServiceCharge(propertyType, beds, bhk) {
+  console.log('💰 Calculating service charge:');
+  console.log('  propertyType:', propertyType, typeof propertyType);
+  console.log('  beds:', beds, typeof beds);
+  console.log('  bhk:', bhk, typeof bhk);
+  
   const RATE_PER_UNIT = 18; // ₹18 per bed/bedroom
   
+  let charge = RATE_PER_UNIT; // Default minimum
+  
   if (propertyType === 'PG') {
-    // For PG: charge per bed
-    return beds * RATE_PER_UNIT;
+    const bedCount = parseInt(beds) || 1;
+    charge = bedCount * RATE_PER_UNIT;
+    console.log(`  ✅ PG: ${bedCount} beds × ₹${RATE_PER_UNIT} = ₹${charge}`);
   } else if (propertyType === 'Flat' || propertyType === 'Apartment') {
-    // For Flat/Apartment: charge per bedroom (bhk)
     const bedroomCount = parseInt(bhk) || 1;
-    return bedroomCount * RATE_PER_UNIT;
+    charge = bedroomCount * RATE_PER_UNIT;
+    console.log(`  ✅ Flat: ${bedroomCount} BHK × ₹${RATE_PER_UNIT} = ₹${charge}`);
+  } else {
+    console.log(`  ✅ Default: 1 × ₹${RATE_PER_UNIT} = ₹${charge}`);
   }
   
-  // Default: 1 unit charge
-  return RATE_PER_UNIT;
+  if (charge < RATE_PER_UNIT) {
+    console.warn(`  ⚠️ Charge too low, using minimum: ${RATE_PER_UNIT}`);
+    charge = RATE_PER_UNIT;
+  }
+  
+  return charge;
 }
 
-// Create Razorpay order
+// ========================================
+// 1. CREATE/UPDATE RAZORPAY LINKED ACCOUNT FOR OWNER
+// Call this when owner registers or updates bank details
+// ========================================
+router.post('/create-linked-account', async (req, res) => {
+  try {
+    const {
+      ownerId,
+      email,
+      phone,
+      name,
+      bankAccountNumber,
+      ifsc,
+      accountHolderName,
+    } = req.body;
+
+    console.log('🏦 Creating linked account for owner:', name);
+
+    // Validate required fields
+    if (!ownerId || !email || !phone || !name || !bankAccountNumber || !ifsc || !accountHolderName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields for linked account creation',
+      });
+    }
+
+    // Create contact in Razorpay
+    const contact = await razorpay.contacts.create({
+      name: accountHolderName,
+      email: email,
+      contact: phone,
+      type: 'vendor',
+      reference_id: ownerId,
+      notes: {
+        ownerId: ownerId,
+        ownerName: name,
+      }
+    });
+
+    console.log('✅ Contact created:', contact.id);
+
+    // Create fund account (bank account) linked to contact
+    const fundAccount = await razorpay.fundAccount.create({
+      contact_id: contact.id,
+      account_type: 'bank_account',
+      bank_account: {
+        name: accountHolderName,
+        ifsc: ifsc,
+        account_number: bankAccountNumber,
+      }
+    });
+
+    console.log('✅ Fund account created:', fundAccount.id);
+
+    // Update user in database with Razorpay IDs
+    await User.findByIdAndUpdate(ownerId, {
+      $set: {
+        'razorpayContactId': contact.id,
+        'razorpayFundAccountId': fundAccount.id,
+        'bankDetails': {
+          accountNumber: bankAccountNumber,
+          ifsc: ifsc,
+          accountHolderName: accountHolderName,
+          verifiedAt: new Date(),
+        }
+      }
+    });
+
+    console.log('✅ Owner updated in database with Razorpay details');
+
+    res.status(200).json({
+      success: true,
+      message: 'Linked account created successfully',
+      contactId: contact.id,
+      fundAccountId: fundAccount.id,
+    });
+
+  } catch (error) {
+    console.error('❌ Error creating linked account:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create linked account',
+      error: error.message,
+    });
+  }
+});
+
+// ========================================
+// 2. CREATE OWNER SERVICE CHARGE ORDER
+// For property owners to pay ₹18/bed platform fee
+// ========================================
 router.post('/create-order', async (req, res) => {
   try {
     const { propertyType, beds, bhk, propertyTitle } = req.body;
     
+    console.log('🔵 ========== OWNER SERVICE CHARGE ==========');
+    console.log('Property Type:', propertyType);
+    console.log('Beds:', beds);
+    console.log('BHK:', bhk);
+    
     // Calculate service charge
-    const amount = calculateServiceCharge(propertyType, beds, bhk);
+    let amount = calculateServiceCharge(propertyType, beds, bhk);
+    
+    if (!amount || amount < 1) {
+      console.warn('⚠️ Amount too low, setting to minimum ₹1');
+      amount = 1;
+    }
+    
+    const amountInPaise = Math.round(amount * 100);
+    console.log('💰 Amount in paise:', amountInPaise);
+    
+    if (amountInPaise < 100) {
+      return res.status(400).json({
+        success: false,
+        message: `Amount too low: ₹${amount}. Minimum ₹1 required.`,
+      });
+    }
     
     // Create Razorpay order
     const options = {
-      amount: amount * 100, // Convert to paise (Razorpay uses smallest currency unit)
+      amount: amountInPaise,
       currency: 'INR',
-      receipt: `receipt_${Date.now()}`,
+      receipt: `owner_svc_${Date.now()}`,
       notes: {
-        propertyType,
+        type: 'owner_service_charge',
+        propertyType: propertyType || 'Unknown',
         beds: beds || 0,
-        bhk: bhk || 0,
-        propertyTitle,
+        bhk: bhk || '0',
+        propertyTitle: propertyTitle || 'Property',
       },
     };
     
+    console.log('📤 Creating Razorpay order:', JSON.stringify(options, null, 2));
+    
     const order = await razorpay.orders.create(options);
     
-    console.log('✅ Razorpay order created:', order.id);
+    console.log('✅ Order created:', order.id);
+    console.log('🔵 ==========================================\n');
     
     res.status(200).json({
       success: true,
@@ -60,7 +199,7 @@ router.post('/create-order', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Error creating Razorpay order:', error);
+    console.error('❌ Error creating service charge order:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to create payment order',
@@ -69,7 +208,130 @@ router.post('/create-order', async (req, res) => {
   }
 });
 
-// Verify payment signature
+// ========================================
+// 3. CREATE TENANT RENT ORDER WITH AUTO-TRANSFER
+// For tenants to pay rent that auto-transfers to property owner
+// ========================================
+router.post('/create-tenant-order', async (req, res) => {
+  try {
+    const {
+      propertyId,
+      ownerId,
+      tenantName,
+      tenantEmail,
+      tenantPhone,
+      monthlyRent,
+      securityDeposit,
+      propertyTitle,
+    } = req.body;
+
+    console.log('🔵 ========== TENANT RENT PAYMENT ==========');
+    console.log('Property ID:', propertyId);
+    console.log('Owner ID:', ownerId);
+    console.log('Monthly Rent:', monthlyRent);
+    console.log('Security Deposit:', securityDeposit);
+
+    // Validate required fields
+    if (!propertyId || !ownerId || !monthlyRent || !securityDeposit) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields',
+      });
+    }
+
+    const totalAmount = parseInt(monthlyRent) + parseInt(securityDeposit);
+    console.log('💰 Total Amount: ₹' + totalAmount);
+
+    if (totalAmount < 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount must be at least ₹1',
+      });
+    }
+
+    // Get owner's fund account from database
+    const owner = await User.findById(ownerId);
+    
+    if (!owner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property owner not found',
+      });
+    }
+
+    if (!owner.razorpayFundAccountId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Owner has not set up bank account. Please contact property owner.',
+      });
+    }
+
+    console.log('✅ Owner fund account ID:', owner.razorpayFundAccountId);
+
+    // Create Razorpay order with transfer
+    const amountInPaise = totalAmount * 100;
+    
+    const orderOptions = {
+      amount: amountInPaise,
+      currency: 'INR',
+      receipt: `tenant_rent_${Date.now()}`,
+      notes: {
+        type: 'tenant_rent_payment',
+        propertyId: propertyId,
+        ownerId: ownerId,
+        propertyTitle: propertyTitle || 'Property',
+        monthlyRent: monthlyRent,
+        securityDeposit: securityDeposit,
+        tenantName: tenantName || '',
+        tenantEmail: tenantEmail || '',
+      },
+      // Auto-transfer to owner after payment
+      transfers: [
+        {
+          account: owner.razorpayFundAccountId,
+          amount: amountInPaise, // Full amount goes to owner
+          currency: 'INR',
+          notes: {
+            propertyId: propertyId,
+            rentPayment: true,
+          },
+          linked_account_notes: [
+            'Rent payment',
+          ],
+          on_hold: 0, // Transfer immediately (0 = immediate, 1 = hold)
+        }
+      ]
+    };
+
+    console.log('📤 Creating order with auto-transfer...');
+
+    const order = await razorpay.orders.create(orderOptions);
+
+    console.log('✅ Order created with transfer:', order.id);
+    console.log('🔵 ==========================================\n');
+
+    res.status(200).json({
+      success: true,
+      orderId: order.id,
+      amount: totalAmount,
+      currency: 'INR',
+      key: process.env.RAZORPAY_KEY_ID,
+    });
+
+  } catch (error) {
+    console.error('❌ Error creating tenant order:', error);
+    console.error('Error details:', error.error || error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create payment order',
+      error: error.message,
+    });
+  }
+});
+
+// ========================================
+// 4. VERIFY PAYMENT SIGNATURE
+// ========================================
 router.post('/verify-payment', async (req, res) => {
   try {
     const {
@@ -79,6 +341,8 @@ router.post('/verify-payment', async (req, res) => {
       propertyData,
     } = req.body;
     
+    console.log('🔍 Verifying payment:', razorpay_payment_id);
+    
     // Verify signature
     const sign = razorpay_order_id + '|' + razorpay_payment_id;
     const expectedSign = crypto
@@ -87,21 +351,21 @@ router.post('/verify-payment', async (req, res) => {
       .digest('hex');
     
     if (razorpay_signature === expectedSign) {
-      console.log('✅ Payment signature verified successfully');
+      console.log('✅ Payment signature verified');
       
-      // Store payment details in database
+      // TODO: Store payment record in database
       const paymentRecord = {
         orderId: razorpay_order_id,
         paymentId: razorpay_payment_id,
         signature: razorpay_signature,
-        propertyId: propertyData.propertyId,
-        ownerId: propertyData.ownerId,
-        amount: propertyData.amount,
+        propertyId: propertyData?.propertyId,
+        ownerId: propertyData?.ownerId,
+        amount: propertyData?.amount,
         status: 'success',
         createdAt: new Date(),
       };
       
-      // TODO: Save to payments collection in MongoDB
+      console.log('💾 Payment verified:', paymentRecord);
       // await db.collection('payments').insertOne(paymentRecord);
       
       res.status(200).json({
@@ -126,11 +390,14 @@ router.post('/verify-payment', async (req, res) => {
   }
 });
 
-// Get payment details
+// ========================================
+// 5. GET PAYMENT DETAILS
+// ========================================
 router.get('/payment/:paymentId', async (req, res) => {
   try {
     const { paymentId } = req.params;
     
+    console.log('📋 Fetching payment:', paymentId);
     const payment = await razorpay.payments.fetch(paymentId);
     
     res.status(200).json({
@@ -142,6 +409,68 @@ router.get('/payment/:paymentId', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch payment details',
+      error: error.message,
+    });
+  }
+});
+
+// ========================================
+// 6. GET TRANSFER STATUS
+// ========================================
+router.get('/transfer-status/:paymentId', async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    
+    console.log('📋 Fetching transfers for payment:', paymentId);
+    const transfers = await razorpay.payments.fetchTransfers(paymentId);
+    
+    res.status(200).json({
+      success: true,
+      transfers: transfers.items,
+    });
+  } catch (error) {
+    console.error('❌ Error fetching transfers:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch transfer status',
+      error: error.message,
+    });
+  }
+});
+
+// ========================================
+// 7. TEST RAZORPAY CONNECTION
+// ========================================
+router.get('/test-razorpay', async (req, res) => {
+  try {
+    console.log('🧪 Testing Razorpay connection...');
+    
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+      return res.status(500).json({
+        success: false,
+        message: 'Razorpay credentials not configured',
+      });
+    }
+    
+    const testOrder = await razorpay.orders.create({
+      amount: 100,
+      currency: 'INR',
+      receipt: 'test_' + Date.now(),
+    });
+    
+    console.log('✅ Razorpay test successful!');
+    
+    res.json({
+      success: true,
+      message: 'Razorpay is configured correctly!',
+      testOrderId: testOrder.id,
+    });
+  } catch (error) {
+    console.error('❌ Razorpay test failed:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Razorpay test failed',
+      error: error.message,
     });
   }
 });
