@@ -60,9 +60,6 @@ function calculateServiceCharge(propertyType, beds, bhk) {
 }
 
 // ========================================
-// NEW: SAVE BANK DETAILS (Called from Flutter App)
-// This is the route your Flutter app is calling
-// ========================================
 router.post('/bank-details', async (req, res) => {
   try {
     const {
@@ -71,17 +68,10 @@ router.post('/bank-details', async (req, res) => {
       ifscCode,
       bankName,
       branchName,
-      ownerId, // You might get this from auth middleware or body
+      ownerId,
     } = req.body;
 
     console.log('🏦 Creating linked account for owner:', accountHolderName);
-    console.log('📋 Bank Details:', {
-      accountHolderName,
-      accountNumber: accountNumber ? '****' + accountNumber.slice(-4) : 'N/A',
-      ifscCode,
-      bankName,
-      branchName,
-    });
 
     // Validate required fields
     if (!accountHolderName || !accountNumber || !ifscCode) {
@@ -100,20 +90,9 @@ router.post('/bank-details', async (req, res) => {
       });
     }
 
-    // Get owner from database
-    // TODO: Replace with actual auth middleware to get ownerId
-    let owner;
-    if (ownerId) {
-      owner = await User.findById(ownerId);
-    } else {
-      // If you have auth middleware, get from req.user
-      // owner = await User.findById(req.user.id);
-      return res.status(400).json({
-        success: false,
-        message: 'Owner ID is required. Please login again.',
-      });
-    }
-
+    // ✅ Get owner from database (this will have phone and email)
+    const owner = await User.findById(ownerId);
+    
     if (!owner) {
       return res.status(404).json({
         success: false,
@@ -121,7 +100,7 @@ router.post('/bank-details', async (req, res) => {
       });
     }
 
-    // Ensure owner has email and phone
+    // ✅ Check if owner has email
     if (!owner.email) {
       return res.status(400).json({
         success: false,
@@ -129,10 +108,14 @@ router.post('/bank-details', async (req, res) => {
       });
     }
 
-    if (!owner.phone) {
+    // ✅ Check if owner has phone - if not, use a default or ask them to add it
+    let ownerPhone = owner.phone;
+    
+    if (!ownerPhone) {
       return res.status(400).json({
         success: false,
-        message: 'Owner phone number is required. Please update your profile.',
+        message: 'Phone number is required for bank verification. Please add your phone number in profile settings.',
+        requiresPhone: true, // Flag to show phone input in Flutter
       });
     }
 
@@ -140,7 +123,7 @@ router.post('/bank-details', async (req, res) => {
       id: owner._id,
       name: owner.name || accountHolderName,
       email: owner.email,
-      phone: owner.phone,
+      phone: ownerPhone,
     });
 
     // ===================================================
@@ -150,7 +133,6 @@ router.post('/bank-details', async (req, res) => {
     
     let contact;
     try {
-      // Check if razorpay.contacts exists
       if (!razorpay.contacts) {
         throw new Error('Razorpay contacts API not available. Check Razorpay initialization.');
       }
@@ -158,7 +140,7 @@ router.post('/bank-details', async (req, res) => {
       contact = await razorpay.contacts.create({
         name: accountHolderName,
         email: owner.email,
-        contact: owner.phone,
+        contact: ownerPhone,
         type: 'vendor',
         reference_id: owner._id.toString(),
         notes: {
@@ -192,7 +174,6 @@ router.post('/bank-details', async (req, res) => {
     
     let fundAccount;
     try {
-      // Check if razorpay.fundAccount exists
       if (!razorpay.fundAccount) {
         throw new Error('Razorpay fund account API not available. Check Razorpay initialization.');
       }
