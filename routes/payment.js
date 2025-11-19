@@ -52,7 +52,13 @@ function calculateServiceCharge(propertyType, beds, bhk) {
   if (propertyType === 'PG') {
     charge = (parseInt(beds) || 1) * RATE_PER_UNIT;
   } else if (propertyType === 'Flat' || propertyType === 'Apartment') {
-    charge = (parseInt(bhk) || 1) * RATE_PER_UNIT;
+    // Extract number from "3 BHK" format
+    if (bhk) {
+      const match = bhk.match(/(\d+)/);
+      if (match) {
+        charge = parseInt(match[1]) * RATE_PER_UNIT;
+      }
+    }
   }
   
   return Math.max(charge, RATE_PER_UNIT);
