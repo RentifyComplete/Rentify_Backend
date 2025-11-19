@@ -39,7 +39,8 @@ app.get('/', (req, res) => {
       'GET /api/properties',
       'POST /api/properties',
       'POST /api/auth/*',
-      'POST /api/payments/*'
+      'POST /api/payments/*',
+      'POST /api/bookings/*'
     ]
   });
 });
@@ -53,6 +54,9 @@ app.use('/api/payments', paymentRoutes);
 
 const propertyRoutes = require('./routes/propertyRoutes');
 app.use('/api/properties', propertyRoutes);
+
+const bookingRoutes = require('./routes/booking');
+app.use('/api/bookings', bookingRoutes);
 
 // ------------------- 404 Handler -------------------
 app.use((req, res) => {
