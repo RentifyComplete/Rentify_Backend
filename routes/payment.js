@@ -1,7 +1,8 @@
 // ========================================
-// COMPLETE BACKEND PAYMENT ROUTES
+// COMPLETE BACKEND PAYMENT ROUTES - FIXED
 // File: routes/payment.js
 // Supports both Owner Service Charge & Tenant Rent Payment with Auto-Transfer
+// ✅ FIXED: Phone validation now uses req.body.phone instead of user.phone
 // ========================================
 
 const express = require('express');
@@ -60,6 +61,8 @@ function calculateServiceCharge(propertyType, beds, bhk) {
 }
 
 // ========================================
+// ✅ FIXED: /bank-details - Now uses req.body.phone
+// ========================================
 router.post('/bank-details', async (req, res) => {
   try {
     const {
@@ -69,65 +72,84 @@ router.post('/bank-details', async (req, res) => {
       bankName,
       branchName,
       ownerId,
+      email,    // ✅ ADDED: Get email from request body
+      phone,    // ✅ ADDED: Get phone from request body
     } = req.body;
 
-    console.log('🏦 Creating linked account for owner:', accountHolderName);
+    console.log('🏦 ==================== BANK DETAILS REQUEST ====================');
+    console.log('Creating linked account for owner:', accountHolderName);
+    console.log('Request Body:', JSON.stringify(req.body, null, 2));
+    console.log('Phone from request:', phone);
+    console.log('Email from request:', email);
 
-    // Validate required fields
-    if (!accountHolderName || !accountNumber || !ifscCode) {
+    // ✅ FIX 1: Validate phone from REQUEST BODY (not from user profile)
+    if (!phone || phone.trim() === '') {
+      console.error('❌ Phone number missing from request');
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields: accountHolderName, accountNumber, ifscCode',
+        message: 'Phone number is required',
+      });
+    }
+
+    // ✅ FIX 2: Validate phone format
+    const phoneRegex = /^[6-9]\d{9}$/;
+    if (!phoneRegex.test(phone.trim())) {
+      console.error('❌ Invalid phone format:', phone);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid phone number format. Must be 10 digits starting with 6-9',
+      });
+    }
+
+    // Validate other required fields
+    if (!accountHolderName || !accountNumber || !ifscCode || !ownerId) {
+      console.error('❌ Missing required fields');
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: accountHolderName, accountNumber, ifscCode, ownerId',
+      });
+    }
+
+    // ✅ FIX 3: Validate email from REQUEST BODY
+    if (!email || email.trim() === '') {
+      console.error('❌ Email missing from request');
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required',
       });
     }
 
     // Validate IFSC format
     const ifscRegex = /^[A-Z]{4}0[A-Z0-9]{6}$/;
     if (!ifscRegex.test(ifscCode.toUpperCase())) {
+      console.error('❌ Invalid IFSC code format');
       return res.status(400).json({
         success: false,
         message: 'Invalid IFSC code format. Must be 11 characters (e.g., SBIN0001234)',
       });
     }
 
-    // ✅ Get owner from database (this will have phone and email)
+    // Get owner from database
     const owner = await User.findById(ownerId);
     
     if (!owner) {
+      console.error('❌ Owner not found:', ownerId);
       return res.status(404).json({
         success: false,
         message: 'Owner not found',
       });
     }
 
-    // ✅ Check if owner has email
-    if (!owner.email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Owner email is required. Please update your profile.',
-      });
-    }
-
-    // ✅ Check if owner has phone - if not, use a default or ask them to add it
-    let ownerPhone = owner.phone;
-    
-    if (!ownerPhone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Phone number is required for bank verification. Please add your phone number in profile settings.',
-        requiresPhone: true, // Flag to show phone input in Flutter
-      });
-    }
-
-    console.log('👤 Owner details:', {
+    console.log('✅ Owner found:', {
       id: owner._id,
       name: owner.name || accountHolderName,
-      email: owner.email,
-      phone: ownerPhone,
+      email: email,
+      phone: phone,
     });
 
     // ===================================================
     // Step 1: Create Razorpay Contact
+    // ✅ FIX 4: Use phone and email from REQUEST BODY
     // ===================================================
     console.log('📞 Creating Razorpay contact...');
     
@@ -139,8 +161,8 @@ router.post('/bank-details', async (req, res) => {
 
       contact = await razorpay.contacts.create({
         name: accountHolderName,
-        email: owner.email,
-        contact: ownerPhone,
+        email: email,           // ✅ From request body
+        contact: phone,         // ✅ From request body
         type: 'vendor',
         reference_id: owner._id.toString(),
         notes: {
@@ -208,6 +230,7 @@ router.post('/bank-details', async (req, res) => {
 
     // ===================================================
     // Step 3: Save to Database
+    // ✅ FIX 5: Update user's phone in database for future use
     // ===================================================
     console.log('💾 Saving to database...');
     
@@ -215,6 +238,8 @@ router.post('/bank-details', async (req, res) => {
       $set: {
         razorpayContactId: contact.id,
         razorpayFundAccountId: fundAccount.id,
+        'personalDetails.phone': phone,  // ✅ Update phone in nested structure
+        email: email,                     // ✅ Update email if needed
         bankDetails: {
           accountHolderName,
           accountNumber,
@@ -227,6 +252,7 @@ router.post('/bank-details', async (req, res) => {
     });
 
     console.log('✅ Owner bank details saved successfully');
+    console.log('🏦 ==================== SUCCESS ====================\n');
 
     res.status(200).json({
       success: true,
@@ -239,6 +265,7 @@ router.post('/bank-details', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error in /bank-details route:', error);
+    console.error('Stack trace:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Failed to create linked account',
@@ -306,6 +333,8 @@ router.post('/create-linked-account', async (req, res) => {
       $set: {
         'razorpayContactId': contact.id,
         'razorpayFundAccountId': fundAccount.id,
+        'personalDetails.phone': phone,  // ✅ Update phone
+        'email': email,                   // ✅ Update email
         'bankDetails': {
           accountNumber: bankAccountNumber,
           ifsc: ifsc,
