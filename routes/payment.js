@@ -1,6 +1,6 @@
 // ========================================
 // COMPLETE BACKEND PAYMENT ROUTES
-// File: routes/payments.js
+// File: routes/payment.js
 // Supports both Owner Service Charge & Tenant Rent Payment with Auto-Transfer
 // ========================================
 
@@ -10,11 +10,19 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const User = require('../models/user'); // Adjust path as needed
 
-// Initialize Razorpay
+// ✅ Initialize Razorpay - CRITICAL: Must be done before any route
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
+
+// Verify Razorpay is properly initialized
+console.log('🔑 Razorpay Configuration Check:');
+console.log('  - Key ID exists:', !!process.env.RAZORPAY_KEY_ID);
+console.log('  - Key Secret exists:', !!process.env.RAZORPAY_KEY_SECRET);
+console.log('  - Razorpay instance created:', !!razorpay);
+console.log('  - Contacts API available:', typeof razorpay.contacts !== 'undefined');
+console.log('  - Fund Account API available:', typeof razorpay.fundAccount !== 'undefined');
 
 // ========================================
 // HELPER FUNCTIONS
@@ -50,6 +58,213 @@ function calculateServiceCharge(propertyType, beds, bhk) {
   
   return charge;
 }
+
+// ========================================
+// NEW: SAVE BANK DETAILS (Called from Flutter App)
+// This is the route your Flutter app is calling
+// ========================================
+router.post('/bank-details', async (req, res) => {
+  try {
+    const {
+      accountHolderName,
+      accountNumber,
+      ifscCode,
+      bankName,
+      branchName,
+      ownerId, // You might get this from auth middleware or body
+    } = req.body;
+
+    console.log('🏦 Creating linked account for owner:', accountHolderName);
+    console.log('📋 Bank Details:', {
+      accountHolderName,
+      accountNumber: accountNumber ? '****' + accountNumber.slice(-4) : 'N/A',
+      ifscCode,
+      bankName,
+      branchName,
+    });
+
+    // Validate required fields
+    if (!accountHolderName || !accountNumber || !ifscCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: accountHolderName, accountNumber, ifscCode',
+      });
+    }
+
+    // Validate IFSC format
+    const ifscRegex = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+    if (!ifscRegex.test(ifscCode.toUpperCase())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid IFSC code format. Must be 11 characters (e.g., SBIN0001234)',
+      });
+    }
+
+    // Get owner from database
+    // TODO: Replace with actual auth middleware to get ownerId
+    let owner;
+    if (ownerId) {
+      owner = await User.findById(ownerId);
+    } else {
+      // If you have auth middleware, get from req.user
+      // owner = await User.findById(req.user.id);
+      return res.status(400).json({
+        success: false,
+        message: 'Owner ID is required. Please login again.',
+      });
+    }
+
+    if (!owner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Owner not found',
+      });
+    }
+
+    // Ensure owner has email and phone
+    if (!owner.email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Owner email is required. Please update your profile.',
+      });
+    }
+
+    if (!owner.phone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Owner phone number is required. Please update your profile.',
+      });
+    }
+
+    console.log('👤 Owner details:', {
+      id: owner._id,
+      name: owner.name || accountHolderName,
+      email: owner.email,
+      phone: owner.phone,
+    });
+
+    // ===================================================
+    // Step 1: Create Razorpay Contact
+    // ===================================================
+    console.log('📞 Creating Razorpay contact...');
+    
+    let contact;
+    try {
+      // Check if razorpay.contacts exists
+      if (!razorpay.contacts) {
+        throw new Error('Razorpay contacts API not available. Check Razorpay initialization.');
+      }
+
+      contact = await razorpay.contacts.create({
+        name: accountHolderName,
+        email: owner.email,
+        contact: owner.phone,
+        type: 'vendor',
+        reference_id: owner._id.toString(),
+        notes: {
+          owner_id: owner._id.toString(),
+          account_holder: accountHolderName,
+        },
+      });
+      
+      console.log('✅ Contact created:', contact.id);
+    } catch (error) {
+      console.error('❌ Error creating Razorpay contact:', error);
+      
+      if (error.error) {
+        return res.status(400).json({
+          success: false,
+          message: `Razorpay Contact Error: ${error.error.description}`,
+          details: error.error,
+        });
+      }
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to create Razorpay contact: ' + error.message,
+      });
+    }
+
+    // ===================================================
+    // Step 2: Create Fund Account (Bank Account)
+    // ===================================================
+    console.log('🏦 Creating fund account...');
+    
+    let fundAccount;
+    try {
+      // Check if razorpay.fundAccount exists
+      if (!razorpay.fundAccount) {
+        throw new Error('Razorpay fund account API not available. Check Razorpay initialization.');
+      }
+
+      fundAccount = await razorpay.fundAccount.create({
+        contact_id: contact.id,
+        account_type: 'bank_account',
+        bank_account: {
+          name: accountHolderName,
+          ifsc: ifscCode.toUpperCase(),
+          account_number: accountNumber,
+        },
+      });
+      
+      console.log('✅ Fund account created:', fundAccount.id);
+    } catch (error) {
+      console.error('❌ Error creating fund account:', error);
+      
+      if (error.error) {
+        return res.status(400).json({
+          success: false,
+          message: `Razorpay Fund Account Error: ${error.error.description}`,
+          details: error.error,
+        });
+      }
+      
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to create fund account: ' + error.message,
+      });
+    }
+
+    // ===================================================
+    // Step 3: Save to Database
+    // ===================================================
+    console.log('💾 Saving to database...');
+    
+    await User.findByIdAndUpdate(owner._id, {
+      $set: {
+        razorpayContactId: contact.id,
+        razorpayFundAccountId: fundAccount.id,
+        bankDetails: {
+          accountHolderName,
+          accountNumber,
+          ifscCode: ifscCode.toUpperCase(),
+          bankName,
+          branchName,
+          verifiedAt: new Date(),
+        },
+      },
+    });
+
+    console.log('✅ Owner bank details saved successfully');
+
+    res.status(200).json({
+      success: true,
+      message: 'Bank details saved successfully',
+      data: {
+        contactId: contact.id,
+        fundAccountId: fundAccount.id,
+      },
+    });
+
+  } catch (error) {
+    console.error('❌ Error in /bank-details route:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create linked account',
+      error: error.message,
+    });
+  }
+});
 
 // ========================================
 // 1. CREATE/UPDATE RAZORPAY LINKED ACCOUNT FOR OWNER
