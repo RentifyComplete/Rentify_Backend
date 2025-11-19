@@ -97,7 +97,9 @@ router.post('/create', async (req, res) => {
 
 // ========================================
 // GET BOOKINGS FOR OWNER
-// ========================================
+// BACKEND: routes/booking.js - UPDATED GET OWNER BOOKINGS ENDPOINT
+// Replace the GET /owner/:ownerId route with this:
+
 router.get('/owner/:ownerId', async (req, res) => {
   try {
     const { ownerId } = req.params;
@@ -106,10 +108,21 @@ router.get('/owner/:ownerId', async (req, res) => {
 
     const db = req.app.locals.db;
     if (!db) {
+      console.log('❌ Database not connected');
       return res.status(500).json({
         success: false,
         message: 'Database not connected',
-        bookings: [] // ⭐ Add this
+        bookings: [] // ⭐ Always return empty array
+      });
+    }
+
+    // Validate ownerId
+    if (!ownerId || ownerId === 'undefined' || ownerId === 'null') {
+      console.log('❌ Invalid owner ID');
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid owner ID',
+        bookings: []
       });
     }
 
@@ -119,19 +132,24 @@ router.get('/owner/:ownerId', async (req, res) => {
       .sort({ createdAt: -1 })
       .toArray();
 
-    console.log(`✅ Found ${bookings.length} bookings`);
+    console.log(`✅ Found ${bookings.length} bookings for owner ${ownerId}`);
 
+    // ⭐ Always return bookings array (even if empty)
     res.status(200).json({
       success: true,
-      bookings: bookings || [], // ⭐ Ensure it's always an array, never null
+      bookings: bookings || [], // Never null
+      count: bookings.length
     });
+
   } catch (error) {
     console.error('❌ Error fetching bookings:', error);
+    
+    // ⭐ Even on error, return empty bookings array
     res.status(500).json({
       success: false,
       message: 'Failed to fetch bookings',
       error: error.message,
-      bookings: [] // ⭐ Add this even for errors
+      bookings: [] // Always return empty array on error
     });
   }
 });
