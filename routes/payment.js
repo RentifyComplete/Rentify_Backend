@@ -1,16 +1,17 @@
 // ========================================
-// COMPLETE BACKEND PAYMENT ROUTES - FINAL VERSION
+// COMPLETE BACKEND PAYMENT ROUTES - WITH COUPON SUPPORT
 // File: routes/payment.js
 // ✅ Supports Owner Service Charge & Tenant Rent Payment with Auto-Transfer
 // ✅ Fixed phone validation (uses req.body.phone)
 // ✅ Includes fallback for when Route API is not available
+// ✅ NEW: Full coupon support (RENTIFY25, RENTIFY50, RENTIFY100)
 // ========================================
 
 const express = require('express');
 const router = express.Router();
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
-const User = require('../models/user'); // Adjust path as needed
+const User = require('../models/user');
 
 // ========================================
 // RAZORPAY INITIALIZATION
@@ -21,7 +22,6 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// Verify Razorpay configuration
 console.log('🔑 Razorpay Configuration Check:');
 console.log('  - Key ID exists:', !!process.env.RAZORPAY_KEY_ID);
 console.log('  - Key Secret exists:', !!process.env.RAZORPAY_KEY_SECRET);
@@ -29,7 +29,6 @@ console.log('  - Razorpay instance created:', !!razorpay);
 console.log('  - Contacts API available:', typeof razorpay.contacts !== 'undefined');
 console.log('  - Fund Account API available:', typeof razorpay.fundAccount !== 'undefined');
 
-// Check if Route API is available
 const ROUTE_API_AVAILABLE = typeof razorpay.contacts !== 'undefined' && typeof razorpay.fundAccount !== 'undefined';
 
 if (!ROUTE_API_AVAILABLE) {
@@ -59,9 +58,52 @@ function calculateServiceCharge(propertyType, beds, bhk) {
   return Math.max(charge, RATE_PER_UNIT);
 }
 
+// ✅ NEW: Coupon validation and calculation
+const VALID_COUPONS = {
+  'RENTIFY25': 25,   // 25% off
+  'RENTIFY50': 50,   // 50% off
+  'RENTIFY100': 100, // 100% off (charges ₹1)
+};
+
+function validateAndApplyCoupon(originalAmount, couponCode) {
+  if (!couponCode) {
+    return {
+      valid: true,
+      finalAmount: originalAmount,
+      discount: 0,
+      discountPercent: 0,
+    };
+  }
+
+  const couponUpper = couponCode.toUpperCase();
+  
+  if (!VALID_COUPONS[couponUpper]) {
+    return {
+      valid: false,
+      error: 'Invalid coupon code',
+    };
+  }
+
+  const discountPercent = VALID_COUPONS[couponUpper];
+  const discountAmount = Math.round((originalAmount * discountPercent) / 100);
+  let finalAmount = originalAmount - discountAmount;
+
+  // ✅ Special handling for 100% coupon - charge ₹1 instead of ₹0
+  if (discountPercent === 100 && finalAmount === 0) {
+    finalAmount = 1;
+  }
+
+  return {
+    valid: true,
+    finalAmount,
+    discount: discountAmount,
+    discountPercent,
+    couponCode: couponUpper,
+  };
+}
+
 // ========================================
-// BANK DETAILS - Intelligent Route
-// Automatically uses Route API if available, otherwise saves to DB only
+// BANK DETAILS
 // ========================================
 router.post('/bank-details', async (req, res) => {
   try {
@@ -83,10 +125,7 @@ router.post('/bank-details', async (req, res) => {
     console.log('Phone:', phone);
     console.log('Route API Available:', ROUTE_API_AVAILABLE);
 
-    // ========================================
-    // VALIDATION
-    // ========================================
-
+    // Validation
     if (!phone || phone.trim() === '') {
       return res.status(400).json({
         success: false,
@@ -124,7 +163,6 @@ router.post('/bank-details', async (req, res) => {
       });
     }
 
-    // Get owner from database
     const owner = await User.findById(ownerId);
     if (!owner) {
       return res.status(404).json({
@@ -135,10 +173,7 @@ router.post('/bank-details', async (req, res) => {
 
     console.log('✅ Owner found:', owner._id);
 
-    // ========================================
-    // ROUTE 1: WITH ROUTE API (Full Razorpay Integration)
-    // ========================================
-    
+    // WITH ROUTE API
     if (ROUTE_API_AVAILABLE) {
       console.log('📞 Creating Razorpay contact...');
       
@@ -192,7 +227,6 @@ router.post('/bank-details', async (req, res) => {
         });
       }
 
-      // Save to database with Razorpay IDs
       await User.findByIdAndUpdate(owner._id, {
         $set: {
           razorpayContactId: contact.id,
@@ -225,10 +259,7 @@ router.post('/bank-details', async (req, res) => {
       });
     }
 
-    // ========================================
-    // ROUTE 2: WITHOUT ROUTE API (Database Only)
-    // ========================================
-    
+    // WITHOUT ROUTE API
     console.log('💾 Saving bank details to database (Route API not available)...');
     
     await User.findByIdAndUpdate(owner._id, {
@@ -260,7 +291,7 @@ router.post('/bank-details', async (req, res) => {
         savedAt: new Date(),
         autoTransferEnabled: false,
       },
-      note: 'Automatic transfers will be enabled once Route API is configured. You can still receive rent payments - payouts will be processed manually.',
+      note: 'Automatic transfers will be enabled once Route API is configured.',
     });
 
   } catch (error) {
@@ -280,7 +311,6 @@ router.post('/bank-details', async (req, res) => {
 router.get('/bank-details/:ownerId', async (req, res) => {
   try {
     const { ownerId } = req.params;
-
     const owner = await User.findById(ownerId);
     
     if (!owner) {
@@ -328,104 +358,47 @@ router.get('/bank-details/:ownerId', async (req, res) => {
 });
 
 // ========================================
-// UPGRADE TO RAZORPAY (When Route API becomes available)
-// ========================================
-router.post('/link-bank-to-razorpay/:ownerId', async (req, res) => {
-  try {
-    const { ownerId } = req.params;
-
-    if (!ROUTE_API_AVAILABLE) {
-      return res.status(503).json({
-        success: false,
-        message: 'Route API not available yet. Contact support.',
-        error: 'ROUTE_API_UNAVAILABLE',
-      });
-    }
-
-    const owner = await User.findById(ownerId);
-    
-    if (!owner || !owner.bankDetails) {
-      return res.status(404).json({
-        success: false,
-        message: 'Owner or bank details not found',
-      });
-    }
-
-    if (owner.razorpayContactId && owner.razorpayFundAccountId) {
-      return res.json({
-        success: true,
-        message: 'Already linked to Razorpay',
-        data: {
-          contactId: owner.razorpayContactId,
-          fundAccountId: owner.razorpayFundAccountId,
-        },
-      });
-    }
-
-    console.log('🔗 Linking existing bank details to Razorpay...');
-
-    const contact = await razorpay.contacts.create({
-      name: owner.bankDetails.accountHolderName,
-      email: owner.email,
-      contact: owner.personalDetails?.phone || '9999999999',
-      type: 'vendor',
-      reference_id: owner._id.toString(),
-    });
-
-    const fundAccount = await razorpay.fundAccount.create({
-      contact_id: contact.id,
-      account_type: 'bank_account',
-      bank_account: {
-        name: owner.bankDetails.accountHolderName,
-        ifsc: owner.bankDetails.ifscCode,
-        account_number: owner.bankDetails.accountNumber,
-      },
-    });
-
-    await User.findByIdAndUpdate(owner._id, {
-      $set: {
-        razorpayContactId: contact.id,
-        razorpayFundAccountId: fundAccount.id,
-        'bankDetails.status': 'active',
-      },
-    });
-
-    res.json({
-      success: true,
-      message: 'Bank details linked to Razorpay successfully',
-      data: {
-        contactId: contact.id,
-        fundAccountId: fundAccount.id,
-      },
-    });
-
-  } catch (error) {
-    console.error('❌ Error linking to Razorpay:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to link to Razorpay',
-      error: error.message,
-    });
-  }
-});
-
-// ========================================
-// CREATE OWNER SERVICE CHARGE ORDER
+// CREATE OWNER SERVICE CHARGE ORDER - WITH COUPON SUPPORT
 // ========================================
 router.post('/create-order', async (req, res) => {
   try {
-    const { propertyType, beds, bhk, propertyTitle } = req.body;
+    const { propertyType, beds, bhk, propertyTitle, couponCode } = req.body;
     
-    const amount = calculateServiceCharge(propertyType, beds, bhk);
-    const amountInPaise = Math.round(amount * 100);
+    console.log('💰 ==================== CREATE ORDER ====================');
+    console.log('Property Type:', propertyType);
+    console.log('Beds:', beds);
+    console.log('BHK:', bhk);
+    console.log('Coupon Code:', couponCode || 'None');
+    
+    // Calculate original amount
+    const originalAmount = calculateServiceCharge(propertyType, beds, bhk);
+    console.log('Original Amount: ₹' + originalAmount);
+    
+    // ✅ Apply coupon if provided
+    const couponResult = validateAndApplyCoupon(originalAmount, couponCode);
+    
+    if (!couponResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: couponResult.error,
+      });
+    }
+
+    const finalAmount = couponResult.finalAmount;
+    console.log('Coupon Applied:', couponResult.couponCode || 'None');
+    console.log('Discount:', couponResult.discountPercent + '%');
+    console.log('Final Amount: ₹' + finalAmount);
+    
+    const amountInPaise = Math.round(finalAmount * 100);
     
     if (amountInPaise < 100) {
       return res.status(400).json({
         success: false,
-        message: `Amount too low: ₹${amount}. Minimum ₹1 required.`,
+        message: `Amount too low: ₹${finalAmount}. Minimum ₹1 required.`,
       });
     }
     
+    // Create Razorpay order
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: 'INR',
@@ -436,15 +409,25 @@ router.post('/create-order', async (req, res) => {
         beds: beds || 0,
         bhk: bhk || '0',
         propertyTitle: propertyTitle || 'Property',
+        originalAmount: originalAmount,
+        couponCode: couponResult.couponCode || 'none',
+        discountPercent: couponResult.discountPercent || 0,
+        discountAmount: couponResult.discount || 0,
+        finalAmount: finalAmount,
       },
     });
     
-    console.log('✅ Service charge order created:', order.id);
+    console.log('✅ Order created:', order.id);
+    console.log('💰 ==================== ORDER SUCCESS ====================\n');
     
     res.status(200).json({
       success: true,
       orderId: order.id,
-      amount: amount,
+      amount: finalAmount,
+      originalAmount: originalAmount,
+      discount: couponResult.discount,
+      discountPercent: couponResult.discountPercent,
+      couponCode: couponResult.couponCode,
       currency: 'INR',
       key: process.env.RAZORPAY_KEY_ID,
     });
@@ -455,6 +438,63 @@ router.post('/create-order', async (req, res) => {
       success: false,
       message: 'Failed to create payment order',
       error: error.message,
+    });
+  }
+});
+
+// ========================================
+// VERIFY PAYMENT SIGNATURE - WITH COUPON TRACKING
+// ========================================
+router.post('/verify-payment', async (req, res) => {
+  try {
+    const { 
+      razorpay_order_id, 
+      razorpay_payment_id, 
+      razorpay_signature,
+      propertyData 
+    } = req.body;
+    
+    console.log('🔍 ==================== VERIFY PAYMENT ====================');
+    console.log('Order ID:', razorpay_order_id);
+    console.log('Payment ID:', razorpay_payment_id);
+    console.log('Property Data:', propertyData);
+    
+    const sign = razorpay_order_id + '|' + razorpay_payment_id;
+    const expectedSign = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(sign.toString())
+      .digest('hex');
+    
+    if (razorpay_signature === expectedSign) {
+      console.log('✅ Payment signature verified');
+      
+      // ✅ Log coupon usage if present
+      if (propertyData?.couponCode) {
+        console.log('🎟️ Coupon used:', propertyData.couponCode);
+        console.log('💰 Original Amount: ₹' + propertyData.originalAmount);
+        console.log('💰 Final Amount: ₹' + propertyData.amount);
+        console.log('💸 Discount: ' + propertyData.discountPercent + '%');
+      }
+      
+      console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
+      
+      res.json({ 
+        success: true, 
+        paymentId: razorpay_payment_id,
+        verified: true,
+      });
+    } else {
+      console.error('❌ Invalid payment signature');
+      res.status(400).json({ 
+        success: false, 
+        message: 'Invalid signature' 
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error verifying payment:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
     });
   }
 });
@@ -502,7 +542,6 @@ router.post('/create-tenant-order', async (req, res) => {
 
     const amountInPaise = totalAmount * 100;
     
-    // If Route API available and owner has fund account, create order with transfer
     if (ROUTE_API_AVAILABLE && owner.razorpayFundAccountId) {
       const orderOptions = {
         amount: amountInPaise,
@@ -540,7 +579,6 @@ router.post('/create-tenant-order', async (req, res) => {
       });
     }
 
-    // Otherwise, create regular order (manual payout required)
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: 'INR',
@@ -578,30 +616,6 @@ router.post('/create-tenant-order', async (req, res) => {
 });
 
 // ========================================
-// VERIFY PAYMENT SIGNATURE
-// ========================================
-router.post('/verify-payment', async (req, res) => {
-  try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
-    
-    const sign = razorpay_order_id + '|' + razorpay_payment_id;
-    const expectedSign = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-      .update(sign.toString())
-      .digest('hex');
-    
-    if (razorpay_signature === expectedSign) {
-      console.log('✅ Payment verified:', razorpay_payment_id);
-      res.json({ success: true, paymentId: razorpay_payment_id });
-    } else {
-      res.status(400).json({ success: false, message: 'Invalid signature' });
-    }
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ========================================
 // TEST RAZORPAY CONNECTION
 // ========================================
 router.get('/test-razorpay', async (req, res) => {
@@ -624,6 +638,7 @@ router.get('/test-razorpay', async (req, res) => {
       message: 'Razorpay is configured correctly!',
       testOrderId: testOrder.id,
       routeApiAvailable: ROUTE_API_AVAILABLE,
+      couponsAvailable: Object.keys(VALID_COUPONS),
       apis: {
         orders: typeof razorpay.orders !== 'undefined',
         payments: typeof razorpay.payments !== 'undefined',
