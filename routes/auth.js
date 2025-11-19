@@ -3,7 +3,12 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/user');
 const sendEmail = require('../utils/sendEmail');
-const bcrypt = require('bcryptjs');
+const crypto = require('crypto'); // Use built-in crypto for SHA256
+
+// Helper function to hash password with SHA256 (matches Flutter)
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(password).digest('hex');
+}
 
 // Generate 6-digit OTP
 function generateOTP() {
@@ -206,7 +211,7 @@ router.post('/reset-password', async (req, res) => {
     }
 
     // Password strength validation
-    if (newPassword.length < 6) {
+    if (newPassword.trim().length < 6) {
       return res.status(400).json({ 
         success: false, 
         message: 'Password must be at least 6 characters long' 
@@ -250,8 +255,10 @@ router.post('/reset-password', async (req, res) => {
       });
     }
 
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    // Hash new password with SHA256 (matches Flutter)
+    const hashedPassword = hashPassword(newPassword.trim());
+    
+    console.log(`📝 New password hash: ${hashedPassword.substring(0, 10)}...`);
     
     // Update password and clear OTP
     user.password = hashedPassword;
@@ -282,12 +289,13 @@ router.post('/reset-password', async (req, res) => {
 if (process.env.NODE_ENV === 'development') {
   router.get('/debug-users', async (req, res) => {
     try {
-      const users = await User.find({}, 'email otp otpExpires createdAt');
+      const users = await User.find({}, 'email password otp otpExpires createdAt');
       res.json({
         success: true,
         count: users.length,
         users: users.map(u => ({
           email: u.email,
+          passwordHash: u.password ? u.password.substring(0, 20) + '...' : 'N/A',
           hasOTP: !!u.otp,
           otp: u.otp,
           otpExpires: u.otpExpires,
