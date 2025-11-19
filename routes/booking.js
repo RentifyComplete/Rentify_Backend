@@ -109,6 +109,7 @@ router.get('/owner/:ownerId', async (req, res) => {
       return res.status(500).json({
         success: false,
         message: 'Database not connected',
+        bookings: [] // ⭐ Add this
       });
     }
 
@@ -122,7 +123,7 @@ router.get('/owner/:ownerId', async (req, res) => {
 
     res.status(200).json({
       success: true,
-      bookings,
+      bookings: bookings || [], // ⭐ Ensure it's always an array, never null
     });
   } catch (error) {
     console.error('❌ Error fetching bookings:', error);
@@ -130,10 +131,10 @@ router.get('/owner/:ownerId', async (req, res) => {
       success: false,
       message: 'Failed to fetch bookings',
       error: error.message,
+      bookings: [] // ⭐ Add this even for errors
     });
   }
 });
-
 // ========================================
 // GET BOOKINGS FOR TENANT
 // ========================================
