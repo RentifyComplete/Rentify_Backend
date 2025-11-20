@@ -977,6 +977,9 @@ router.get('/owner-service-status/:ownerId', async (req, res) => {
         inGracePeriod: daysUntilDue < 0 && daysUntilDue >= -10,
         gracePeriodDaysLeft: daysUntilDue < 0 ? Math.max(0, 10 + daysUntilDue) : null,
         monthlyCharge: property.calculateServiceCharge(),
+        type: property.type,
+        beds: property.beds,
+        bhk: property.bhk,
       };
     });
     
