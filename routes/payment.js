@@ -633,17 +633,18 @@ router.post('/create-tenant-order', async (req, res) => {
 });
 
 // ========================================
-// CREATE SERVICE CHARGE SUBSCRIPTION ORDER
+// CREATE SERVICE CHARGE SUBSCRIPTION ORDER - WITH COUPON SUPPORT
 // For paying monthly service fees (1/3/6/12 months)
 // ========================================
 router.post('/create-service-charge-order', async (req, res) => {
   try {
-    const { propertyId, monthsDuration, ownerId } = req.body;
+    const { propertyId, monthsDuration, ownerId, couponCode } = req.body; // ⭐ Added couponCode
     
     console.log('💰 ==================== SERVICE CHARGE ORDER ====================');
     console.log('Property ID:', propertyId);
     console.log('Owner ID:', ownerId);
     console.log('Months Duration:', monthsDuration);
+    console.log('Coupon Code:', couponCode || 'None'); // ⭐ Log coupon
     
     // Validation
     if (!propertyId || !ownerId || !monthsDuration) {
@@ -662,11 +663,26 @@ router.post('/create-service-charge-order', async (req, res) => {
     
     // Get pricing
     const pricing = SERVICE_CHARGE_PRICING[monthsDuration];
-    const amount = pricing.price;
+    const originalAmount = pricing.price;
     
-    console.log('💵 Amount: ₹' + amount);
+    console.log('💵 Original Amount: ₹' + originalAmount);
     console.log('📅 Duration: ' + pricing.months + ' months');
-    console.log('💸 Discount: ' + pricing.discount + '%');
+    console.log('💸 Duration Discount: ' + pricing.discount + '%');
+    
+    // ⭐ Apply coupon if provided
+    const couponResult = validateAndApplyCoupon(originalAmount, couponCode);
+    
+    if (!couponResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: couponResult.error,
+      });
+    }
+
+    const finalAmount = couponResult.finalAmount;
+    console.log('🎟️ Coupon Applied:', couponResult.couponCode || 'None');
+    console.log('💸 Coupon Discount:', couponResult.discountPercent + '%');
+    console.log('💰 Final Amount: ₹' + finalAmount);
     
     // Check if property exists
     const property = await Property.findById(propertyId);
@@ -685,21 +701,25 @@ router.post('/create-service-charge-order', async (req, res) => {
       });
     }
     
-    // Create Razorpay order
-    const amountInPaise = amount * 100;
+    // Create Razorpay order with final amount
+    const amountInPaise = Math.round(finalAmount * 100); // ⭐ Use finalAmount after coupon
     
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: 'INR',
-      receipt: `svc_${Date.now()}`, // ⭐ FIXED: Shortened to fit 40 char limit
+      receipt: `svc_${Date.now()}`,
       notes: {
         type: 'service_charge_subscription',
         propertyId: propertyId,
         ownerId: ownerId,
         propertyTitle: property.title,
         monthsDuration: pricing.months,
-        discount: pricing.discount,
-        pricePerMonth: Math.round(amount / pricing.months),
+        durationDiscount: pricing.discount,
+        originalAmount: originalAmount, // ⭐ Store original
+        couponCode: couponResult.couponCode || 'none', // ⭐ Store coupon
+        couponDiscount: couponResult.discountPercent || 0, // ⭐ Store coupon discount
+        finalAmount: finalAmount, // ⭐ Store final amount
+        pricePerMonth: Math.round(finalAmount / pricing.months),
       },
     });
     
@@ -709,10 +729,14 @@ router.post('/create-service-charge-order', async (req, res) => {
     res.status(200).json({
       success: true,
       orderId: order.id,
-      amount: amount,
+      amount: finalAmount, // ⭐ Return final amount
+      originalAmount: originalAmount, // ⭐ Return original
+      couponDiscount: couponResult.discount, // ⭐ Return discount amount
+      couponPercent: couponResult.discountPercent, // ⭐ Return discount percent
+      couponCode: couponResult.couponCode, // ⭐ Return coupon code
       monthsDuration: pricing.months,
-      discount: pricing.discount,
-      pricePerMonth: Math.round(amount / pricing.months),
+      durationDiscount: pricing.discount,
+      pricePerMonth: Math.round(finalAmount / pricing.months),
       currency: 'INR',
       key: process.env.RAZORPAY_KEY_ID,
     });
