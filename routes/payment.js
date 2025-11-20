@@ -751,7 +751,7 @@ router.post('/create-service-charge-order', async (req, res) => {
     console.log('💸 Discount: ' + pricing.discount + '%');
     
     // Check if property exists
-    const Property = require('../models/Property');
+    const Property = require('../models/property');
     const property = await Property.findById(propertyId);
     
     if (!property) {
@@ -774,7 +774,7 @@ router.post('/create-service-charge-order', async (req, res) => {
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: 'INR',
-      receipt: `service_${propertyId}_${Date.now()}`,
+      receipt: `svc_${Date.now()}`, // ⭐ FIXED: Shortened receipt ID (max 40 chars)
       notes: {
         type: 'service_charge_subscription',
         propertyId: propertyId,
@@ -847,7 +847,7 @@ router.post('/verify-service-charge-payment', async (req, res) => {
     console.log('✅ Payment signature verified');
     
     // Get property
-    const Property = require('../models/Property');
+    const Property = require('../models/property');
     const property = await Property.findById(propertyId);
     
     if (!property) {
@@ -898,7 +898,7 @@ router.get('/service-status/:propertyId', async (req, res) => {
   try {
     const { propertyId } = req.params;
     
-    const Property = require('../models/Property');
+    const Property = require('../models/property');
     const property = await Property.findById(propertyId);
     
     if (!property) {
@@ -957,7 +957,7 @@ router.get('/owner-service-status/:ownerId', async (req, res) => {
   try {
     const { ownerId } = req.params;
     
-    const Property = require('../models/Property');
+    const Property = require('../models/property');
     const properties = await Property.find({ ownerId });
     
     const propertiesWithStatus = properties.map(property => {
@@ -977,6 +977,7 @@ router.get('/owner-service-status/:ownerId', async (req, res) => {
         inGracePeriod: daysUntilDue < 0 && daysUntilDue >= -10,
         gracePeriodDaysLeft: daysUntilDue < 0 ? Math.max(0, 10 + daysUntilDue) : null,
         monthlyCharge: property.calculateServiceCharge(),
+        // ⭐ NEW: Add property details for payment screen
         type: property.type,
         beds: property.beds,
         bhk: property.bhk,
