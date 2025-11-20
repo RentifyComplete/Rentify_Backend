@@ -3,9 +3,7 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
-// ========================================
-// BOOKING SCHEMA
-// ========================================
+// Booking Schema
 const bookingSchema = new mongoose.Schema({
   propertyId: { type: String, required: true },
   ownerId: { type: String, required: true },
@@ -31,9 +29,7 @@ const bookingSchema = new mongoose.Schema({
 
 const Booking = mongoose.model('Booking', bookingSchema);
 
-// ========================================
 // CREATE BOOKING
-// ========================================
 router.post('/create', async (req, res) => {
   try {
     const {
@@ -105,9 +101,7 @@ router.post('/create', async (req, res) => {
   }
 });
 
-// ========================================
 // GET BOOKINGS FOR OWNER
-// ========================================
 router.get('/owner/:ownerId', async (req, res) => {
   try {
     const { ownerId } = req.params;
@@ -143,9 +137,7 @@ router.get('/owner/:ownerId', async (req, res) => {
   }
 });
 
-// ========================================
 // GET BOOKINGS FOR TENANT
-// ========================================
 router.get('/tenant/:tenantEmail', async (req, res) => {
   try {
     const { tenantEmail } = req.params;
@@ -172,9 +164,7 @@ router.get('/tenant/:tenantEmail', async (req, res) => {
   }
 });
 
-// ========================================
 // UPDATE BOOKING STATUS
-// ========================================
 router.put('/:bookingId/status', async (req, res) => {
   try {
     const { bookingId } = req.params;
@@ -215,22 +205,3 @@ router.put('/:bookingId/status', async (req, res) => {
 });
 
 module.exports = router;
-```
-
----
-
-## 🚀 **Deploy This:**
-
-1. **Replace** your `routes/booking.js` with the code above
-2. **Push to GitHub**
-3. **Wait for Render to redeploy** (2-3 minutes)
-4. **Test one more booking** (sorry! 😭 but this will be the LAST one!)
-
----
-
-## ✅ **After This:**
-
-You should see:
-```
-📝 Creating booking: { propertyId: '...', tenantEmail: '...' }
-✅ Booking created: [bookingId]
