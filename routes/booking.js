@@ -1,12 +1,38 @@
-// Backend: routes/booking.js
-// Add this new file to your backend
-
+// routes/booking.js
 const express = require('express');
 const router = express.Router();
-const { ObjectId } = require('mongodb');
+const mongoose = require('mongoose');
 
 // ========================================
-// CREATE BOOKING (After successful payment)
+// BOOKING SCHEMA
+// ========================================
+const bookingSchema = new mongoose.Schema({
+  propertyId: { type: String, required: true },
+  ownerId: { type: String, required: true },
+  tenantId: { type: String, default: null },
+  tenantName: { type: String, required: true },
+  tenantEmail: { type: String, required: true },
+  tenantPhone: { type: String, required: true },
+  monthlyRent: { type: Number, required: true },
+  securityDeposit: { type: Number, required: true },
+  totalAmount: { type: Number, required: true },
+  moveInDate: { type: Date, required: true },
+  leaseDuration: { type: Number, required: true },
+  notes: { type: String, default: '' },
+  paymentId: { type: String, required: true },
+  orderId: { type: String, required: true },
+  status: { type: String, default: 'active' },
+  pendingDues: { type: Number, default: 0 },
+  underNotice: { type: Boolean, default: false },
+  bookingDate: { type: Date, default: Date.now },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+
+const Booking = mongoose.model('Booking', bookingSchema);
+
+// ========================================
+// CREATE BOOKING
 // ========================================
 router.post('/create', async (req, res) => {
   try {
@@ -27,19 +53,9 @@ router.post('/create', async (req, res) => {
 
     console.log('📝 Creating booking:', { propertyId, tenantEmail });
 
-    // Get database
-    const db = req.app.locals.db;
-    if (!db) {
-      return res.status(500).json({
-        success: false,
-        message: 'Database not connected',
-      });
-    }
-
     // Get property to find owner
-    const property = await db.collection('properties').findOne({
-      _id: new ObjectId(propertyId),
-    });
+    const Property = mongoose.model('Property');
+    const property = await Property.findById(propertyId);
 
     if (!property) {
       return res.status(404).json({
@@ -48,11 +64,11 @@ router.post('/create', async (req, res) => {
       });
     }
 
-    // Create booking document
-    const booking = {
-      propertyId: new ObjectId(propertyId),
-      ownerId: new ObjectId(property.ownerId),
-      tenantId: tenantId ? new ObjectId(tenantId) : null,
+    // Create booking
+    const booking = new Booking({
+      propertyId,
+      ownerId: property.ownerId,
+      tenantId,
       tenantName,
       tenantEmail,
       tenantPhone,
@@ -64,26 +80,20 @@ router.post('/create', async (req, res) => {
       notes: notes || '',
       paymentId,
       orderId,
-      status: 'active', // active, pending, cancelled, completed
+      status: 'active',
       pendingDues: 0,
       underNotice: false,
-      bookingDate: new Date(),
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+    });
 
-    const result = await db.collection('bookings').insertOne(booking);
+    await booking.save();
 
-    console.log('✅ Booking created:', result.insertedId);
+    console.log('✅ Booking created:', booking._id);
 
     res.status(200).json({
       success: true,
       message: 'Booking created successfully',
-      bookingId: result.insertedId,
-      booking: {
-        ...booking,
-        _id: result.insertedId,
-      },
+      bookingId: booking._id,
+      booking: booking,
     });
   } catch (error) {
     console.error('❌ Error creating booking:', error);
@@ -97,62 +107,42 @@ router.post('/create', async (req, res) => {
 
 // ========================================
 // GET BOOKINGS FOR OWNER
-// BACKEND: routes/booking.js - UPDATED GET OWNER BOOKINGS ENDPOINT
-// Replace the GET /owner/:ownerId route with this:
-
+// ========================================
 router.get('/owner/:ownerId', async (req, res) => {
   try {
     const { ownerId } = req.params;
 
     console.log('🔍 Fetching bookings for owner:', ownerId);
 
-    const db = req.app.locals.db;
-    if (!db) {
-      console.log('❌ Database not connected');
-      return res.status(500).json({
-        success: false,
-        message: 'Database not connected',
-        bookings: [] // ⭐ Always return empty array
-      });
-    }
-
-    // Validate ownerId
     if (!ownerId || ownerId === 'undefined' || ownerId === 'null') {
-      console.log('❌ Invalid owner ID');
       return res.status(400).json({
         success: false,
         message: 'Invalid owner ID',
-        bookings: []
+        bookings: [],
       });
     }
 
-    const bookings = await db
-      .collection('bookings')
-      .find({ ownerId: new ObjectId(ownerId) })
-      .sort({ createdAt: -1 })
-      .toArray();
+    const bookings = await Booking.find({ ownerId: ownerId })
+      .sort({ createdAt: -1 });
 
     console.log(`✅ Found ${bookings.length} bookings for owner ${ownerId}`);
 
-    // ⭐ Always return bookings array (even if empty)
     res.status(200).json({
       success: true,
-      bookings: bookings || [], // Never null
-      count: bookings.length
+      bookings: bookings,
+      count: bookings.length,
     });
-
   } catch (error) {
     console.error('❌ Error fetching bookings:', error);
-    
-    // ⭐ Even on error, return empty bookings array
     res.status(500).json({
       success: false,
       message: 'Failed to fetch bookings',
       error: error.message,
-      bookings: [] // Always return empty array on error
+      bookings: [],
     });
   }
 });
+
 // ========================================
 // GET BOOKINGS FOR TENANT
 // ========================================
@@ -162,25 +152,14 @@ router.get('/tenant/:tenantEmail', async (req, res) => {
 
     console.log('🔍 Fetching bookings for tenant:', tenantEmail);
 
-    const db = req.app.locals.db;
-    if (!db) {
-      return res.status(500).json({
-        success: false,
-        message: 'Database not connected',
-      });
-    }
-
-    const bookings = await db
-      .collection('bookings')
-      .find({ tenantEmail: tenantEmail })
-      .sort({ createdAt: -1 })
-      .toArray();
+    const bookings = await Booking.find({ tenantEmail: tenantEmail })
+      .sort({ createdAt: -1 });
 
     console.log(`✅ Found ${bookings.length} bookings for tenant`);
 
     res.status(200).json({
       success: true,
-      bookings,
+      bookings: bookings,
     });
   } catch (error) {
     console.error('❌ Error fetching tenant bookings:', error);
@@ -188,6 +167,7 @@ router.get('/tenant/:tenantEmail', async (req, res) => {
       success: false,
       message: 'Failed to fetch bookings',
       error: error.message,
+      bookings: [],
     });
   }
 });
@@ -200,28 +180,19 @@ router.put('/:bookingId/status', async (req, res) => {
     const { bookingId } = req.params;
     const { status, underNotice, pendingDues } = req.body;
 
-    const db = req.app.locals.db;
-    if (!db) {
-      return res.status(500).json({
-        success: false,
-        message: 'Database not connected',
-      });
-    }
-
-    const updateData = {
-      updatedAt: new Date(),
-    };
+    const updateData = { updatedAt: Date.now() };
 
     if (status) updateData.status = status;
     if (underNotice !== undefined) updateData.underNotice = underNotice;
     if (pendingDues !== undefined) updateData.pendingDues = pendingDues;
 
-    const result = await db.collection('bookings').updateOne(
-      { _id: new ObjectId(bookingId) },
-      { $set: updateData }
+    const booking = await Booking.findByIdAndUpdate(
+      bookingId,
+      updateData,
+      { new: true }
     );
 
-    if (result.modifiedCount === 0) {
+    if (!booking) {
       return res.status(404).json({
         success: false,
         message: 'Booking not found',
@@ -231,6 +202,7 @@ router.put('/:bookingId/status', async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'Booking updated successfully',
+      booking: booking,
     });
   } catch (error) {
     console.error('❌ Error updating booking:', error);
@@ -243,3 +215,22 @@ router.put('/:bookingId/status', async (req, res) => {
 });
 
 module.exports = router;
+```
+
+---
+
+## 🚀 **Deploy This:**
+
+1. **Replace** your `routes/booking.js` with the code above
+2. **Push to GitHub**
+3. **Wait for Render to redeploy** (2-3 minutes)
+4. **Test one more booking** (sorry! 😭 but this will be the LAST one!)
+
+---
+
+## ✅ **After This:**
+
+You should see:
+```
+📝 Creating booking: { propertyId: '...', tenantEmail: '...' }
+✅ Booking created: [bookingId]
