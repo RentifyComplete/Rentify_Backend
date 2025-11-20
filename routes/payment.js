@@ -797,19 +797,46 @@ router.post('/verify-service-charge-payment', async (req, res) => {
       });
     }
     
+    console.log('📋 Property found:', property.title);
+    console.log('📅 Current due date:', property.serviceDueDate);
+    
     // Get pricing
-    const pricing = SERVICE_CHARGE_PRICING[monthsDuration];
+    const monthsDurationInt = parseInt(monthsDuration);
+    const pricing = SERVICE_CHARGE_PRICING[monthsDurationInt];
+    
+    if (!pricing) {
+      console.error('❌ Invalid months duration:', monthsDuration);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid months duration: ' + monthsDuration
+      });
+    }
+    
+    console.log('💵 Pricing details:', pricing);
     
     // Record payment and extend service date
-    await property.recordPayment({
-      amount: pricing.price,
-      monthsPaid: pricing.months,
+    const paymentData = {
+      amount: Number(pricing.price),
+      monthsPaid: Number(pricing.months),
       paymentId: razorpay_payment_id,
       orderId: razorpay_order_id
-    });
+    };
     
-    console.log('✅ Property service extended by ' + pricing.months + ' months');
-    console.log('📅 New due date:', property.serviceDueDate);
+    console.log('💾 Recording payment with data:', JSON.stringify(paymentData, null, 2));
+    
+    try {
+      await property.recordPayment(paymentData);
+      console.log('✅ Property service extended by ' + pricing.months + ' months');
+      console.log('📅 New due date:', property.serviceDueDate);
+    } catch (saveError) {
+      console.error('❌ Error saving payment:', saveError);
+      console.error('Payment data was:', paymentData);
+      return res.status(500).json({
+        success: false,
+        message: 'Payment verified but failed to update property',
+        error: saveError.message
+      });
+    }
     console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
     
     res.json({ 
