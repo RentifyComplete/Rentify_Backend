@@ -697,5 +697,321 @@ router.get('/transfer-status/:paymentId', async (req, res) => {
     });
   }
 });
+// ========================================
+// SERVICE CHARGE PAYMENT ROUTES
+// File: Add to routes/payment.js (append these routes)
+// ✅ Monthly subscription payment for property owners
+// ✅ Multiple duration options: 1/3/6/12 months
+// ========================================
 
+// Add these routes to your existing routes/payment.js file
+
+// ⭐ PRICING STRUCTURE
+const SERVICE_CHARGE_PRICING = {
+  1: { months: 1, price: 499, discount: 0 },
+  3: { months: 3, price: 1299, discount: 13 }, // ₹433/month
+  6: { months: 6, price: 2399, discount: 20 }, // ₹400/month
+  12: { months: 12, price: 4499, discount: 25 } // ₹375/month
+};
+
+// ========================================
+// CREATE SERVICE CHARGE SUBSCRIPTION ORDER
+// For paying monthly service fees (1/3/6/12 months)
+// ========================================
+router.post('/create-service-charge-order', async (req, res) => {
+  try {
+    const { propertyId, monthsDuration, ownerId } = req.body;
+    
+    console.log('💰 ==================== SERVICE CHARGE ORDER ====================');
+    console.log('Property ID:', propertyId);
+    console.log('Owner ID:', ownerId);
+    console.log('Months Duration:', monthsDuration);
+    
+    // Validation
+    if (!propertyId || !ownerId || !monthsDuration) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: propertyId, ownerId, monthsDuration'
+      });
+    }
+    
+    if (![1, 3, 6, 12].includes(parseInt(monthsDuration))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid duration. Must be 1, 3, 6, or 12 months'
+      });
+    }
+    
+    // Get pricing
+    const pricing = SERVICE_CHARGE_PRICING[monthsDuration];
+    const amount = pricing.price;
+    
+    console.log('💵 Amount: ₹' + amount);
+    console.log('📅 Duration: ' + pricing.months + ' months');
+    console.log('💸 Discount: ' + pricing.discount + '%');
+    
+    // Check if property exists
+    const Property = require('../models/Property');
+    const property = await Property.findById(propertyId);
+    
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+    
+    if (property.ownerId !== ownerId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized: You do not own this property'
+      });
+    }
+    
+    // Create Razorpay order
+    const amountInPaise = amount * 100;
+    
+    const order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: 'INR',
+      receipt: `service_${propertyId}_${Date.now()}`,
+      notes: {
+        type: 'service_charge_subscription',
+        propertyId: propertyId,
+        ownerId: ownerId,
+        propertyTitle: property.title,
+        monthsDuration: pricing.months,
+        discount: pricing.discount,
+        pricePerMonth: Math.round(amount / pricing.months),
+      },
+    });
+    
+    console.log('✅ Order created:', order.id);
+    console.log('💰 ==================== ORDER SUCCESS ====================\n');
+    
+    res.status(200).json({
+      success: true,
+      orderId: order.id,
+      amount: amount,
+      monthsDuration: pricing.months,
+      discount: pricing.discount,
+      pricePerMonth: Math.round(amount / pricing.months),
+      currency: 'INR',
+      key: process.env.RAZORPAY_KEY_ID,
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creating service charge order:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create order',
+      error: error.message,
+    });
+  }
+});
+
+// ========================================
+// VERIFY SERVICE CHARGE PAYMENT & UPDATE PROPERTY
+// ========================================
+router.post('/verify-service-charge-payment', async (req, res) => {
+  try {
+    const { 
+      razorpay_order_id, 
+      razorpay_payment_id, 
+      razorpay_signature,
+      propertyId,
+      monthsDuration 
+    } = req.body;
+    
+    console.log('🔍 ==================== VERIFY SERVICE CHARGE ====================');
+    console.log('Order ID:', razorpay_order_id);
+    console.log('Payment ID:', razorpay_payment_id);
+    console.log('Property ID:', propertyId);
+    console.log('Months Duration:', monthsDuration);
+    
+    // Verify signature
+    const sign = razorpay_order_id + '|' + razorpay_payment_id;
+    const expectedSign = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(sign.toString())
+      .digest('hex');
+    
+    if (razorpay_signature !== expectedSign) {
+      console.error('❌ Invalid payment signature');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid signature' 
+      });
+    }
+    
+    console.log('✅ Payment signature verified');
+    
+    // Get property
+    const Property = require('../models/Property');
+    const property = await Property.findById(propertyId);
+    
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+    
+    // Get pricing
+    const pricing = SERVICE_CHARGE_PRICING[monthsDuration];
+    
+    // Record payment and extend service date
+    await property.recordPayment({
+      amount: pricing.price,
+      monthsPaid: pricing.months,
+      paymentId: razorpay_payment_id,
+      orderId: razorpay_order_id
+    });
+    
+    console.log('✅ Property service extended by ' + pricing.months + ' months');
+    console.log('📅 New due date:', property.serviceDueDate);
+    console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
+    
+    res.json({ 
+      success: true, 
+      paymentId: razorpay_payment_id,
+      verified: true,
+      newDueDate: property.serviceDueDate,
+      serviceStatus: property.serviceStatus,
+      message: `Service extended for ${pricing.months} month(s)`
+    });
+    
+  } catch (error) {
+    console.error('❌ Error verifying service charge payment:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ========================================
+// GET PROPERTY SERVICE STATUS
+// Check payment status and due date for a property
+// ========================================
+router.get('/service-status/:propertyId', async (req, res) => {
+  try {
+    const { propertyId } = req.params;
+    
+    const Property = require('../models/Property');
+    const property = await Property.findById(propertyId);
+    
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+    
+    // Calculate days until/since due
+    const now = new Date();
+    const dueDate = property.serviceDueDate;
+    const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
+    
+    // Get status
+    const status = property.getPaymentStatus();
+    
+    // Calculate monthly charge
+    const monthlyCharge = property.calculateServiceCharge();
+    
+    res.json({
+      success: true,
+      data: {
+        propertyId: property._id,
+        propertyTitle: property.title,
+        serviceStatus: status,
+        isActive: property.isActive,
+        serviceDueDate: dueDate,
+        daysUntilDue: daysUntilDue,
+        isOverdue: daysUntilDue < 0,
+        inGracePeriod: daysUntilDue < 0 && daysUntilDue >= -10,
+        gracePeriodDaysLeft: daysUntilDue < 0 ? Math.max(0, 10 + daysUntilDue) : null,
+        lastPayment: property.lastServicePayment,
+        monthlyCharge: monthlyCharge,
+        suspendedAt: property.suspendedAt,
+        suspensionReason: property.suspensionReason,
+        paymentHistory: property.servicePaymentHistory.slice(-5).reverse(), // Last 5 payments
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching service status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch service status',
+      error: error.message
+    });
+  }
+});
+
+// ========================================
+// GET ALL PROPERTIES SERVICE STATUS FOR OWNER
+// Get service status for all properties owned by an owner
+// ========================================
+router.get('/owner-service-status/:ownerId', async (req, res) => {
+  try {
+    const { ownerId } = req.params;
+    
+    const Property = require('../models/Property');
+    const properties = await Property.find({ ownerId });
+    
+    const propertiesWithStatus = properties.map(property => {
+      const now = new Date();
+      const dueDate = property.serviceDueDate;
+      const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
+      const status = property.getPaymentStatus();
+      
+      return {
+        propertyId: property._id,
+        propertyTitle: property.title,
+        serviceStatus: status,
+        isActive: property.isActive,
+        serviceDueDate: dueDate,
+        daysUntilDue: daysUntilDue,
+        isOverdue: daysUntilDue < 0,
+        inGracePeriod: daysUntilDue < 0 && daysUntilDue >= -10,
+        gracePeriodDaysLeft: daysUntilDue < 0 ? Math.max(0, 10 + daysUntilDue) : null,
+        monthlyCharge: property.calculateServiceCharge(),
+      };
+    });
+    
+    // Summary
+    const summary = {
+      totalProperties: properties.length,
+      activeProperties: propertiesWithStatus.filter(p => p.serviceStatus === 'active').length,
+      dueProperties: propertiesWithStatus.filter(p => p.serviceStatus === 'due').length,
+      overdueProperties: propertiesWithStatus.filter(p => p.serviceStatus === 'overdue').length,
+      suspendedProperties: propertiesWithStatus.filter(p => p.serviceStatus === 'suspended').length,
+    };
+    
+    res.json({
+      success: true,
+      summary,
+      properties: propertiesWithStatus
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching owner service status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch service status',
+      error: error.message
+    });
+  }
+});
+
+// ========================================
+// GET PRICING OPTIONS
+// ========================================
+router.get('/service-charge-pricing', (req, res) => {
+  res.json({
+    success: true,
+    pricing: SERVICE_CHARGE_PRICING
+  });
+});
 module.exports = router;

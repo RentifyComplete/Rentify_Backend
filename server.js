@@ -1,9 +1,17 @@
-// server.js
+// ========================================
+// FINAL SERVER.JS - WITH SUBSCRIPTION CRON JOB
+// ✅ Includes property status checking
+// ✅ Auto-suspend overdue properties
+// ========================================
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const fs = require('fs');
 require('dotenv').config();
+
+// ⭐ NEW: Import property status cron job
+const { startPropertyStatusCron, runPropertyStatusCheck } = require('./utils/propertyStatusCron');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -22,7 +30,13 @@ app.use((req, res, next) => {
 // ------------------- MongoDB Connection -------------------
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(() => console.log('✅ Connected to MongoDB'))
+  .then(() => {
+    console.log('✅ Connected to MongoDB');
+    
+    // ⭐ NEW: Start property status cron job after DB connection
+    console.log('🕒 Starting property status monitoring...');
+    startPropertyStatusCron();
+  })
   .catch((err) => {
     console.error('❌ MongoDB connection error:', err);
     process.exit(1);
@@ -34,13 +48,24 @@ app.get('/', (req, res) => {
     success: true,
     message: 'Rentify API is running',
     timestamp: new Date().toISOString(),
+    features: [
+      'Property Management',
+      'User Authentication',
+      'Payment Processing',
+      'Booking System',
+      'Monthly Subscription (Auto-renewal)',
+      'Property Status Monitoring (Cron Job)'
+    ],
     routes: [
       'GET /',
       'GET /api/properties',
       'POST /api/properties',
       'POST /api/auth/*',
       'POST /api/payments/*',
-      'POST /api/bookings/*'
+      'POST /api/bookings/*',
+      'GET /api/payments/service-status/:propertyId',
+      'GET /api/payments/owner-service-status/:ownerId',
+      'GET /api/admin/check-property-status (Manual trigger)'
     ]
   });
 });
@@ -57,6 +82,26 @@ app.use('/api/properties', propertyRoutes);
 
 const bookingRoutes = require('./routes/booking');
 app.use('/api/bookings', bookingRoutes);
+
+// ⭐ NEW: Admin endpoint to manually trigger property status check
+app.get('/api/admin/check-property-status', async (req, res) => {
+  try {
+    console.log('🔧 Manual property status check triggered...');
+    const result = await runPropertyStatusCheck();
+    res.json({
+      success: true,
+      message: 'Property status check completed',
+      ...result
+    });
+  } catch (error) {
+    console.error('❌ Manual check failed:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to run property status check',
+      error: error.message 
+    });
+  }
+});
 
 // ------------------- 404 Handler -------------------
 app.use((req, res) => {
@@ -83,9 +128,45 @@ if (!fs.existsSync('uploads')) {
   console.log('📁 Created uploads directory');
 }
 
+// ⭐ NEW: Create utils directory if it doesn't exist
+if (!fs.existsSync('utils')) {
+  fs.mkdirSync('utils');
+  console.log('📁 Created utils directory');
+}
+
 // ------------------- Start Server -------------------
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📍 API: http://localhost:${PORT}`);
-  console.log(`🗄️  MongoDB: ${mongoose.connection.readyState === 1 ? 'Connected' : 'Connecting...'}`);
+  console.log('\n========================================');
+  console.log('🚀 RENTIFY API SERVER');
+  console.log('========================================');
+  console.log(`📍 Server: http://localhost:${PORT}`);
+  console.log(`🗄️  MongoDB: ${mongoose.connection.readyState === 1 ? 'Connected ✅' : 'Connecting... ⏳'}`);
+  console.log(`🕒 Cron Job: Active (Daily at 2:00 AM) ✅`);
+  console.log('========================================');
+  console.log('\n✨ Features Active:');
+  console.log('  - Property Management');
+  console.log('  - Payment Processing (Razorpay)');
+  console.log('  - Booking System');
+  console.log('  - Monthly Subscription');
+  console.log('  - Auto-suspend Overdue Properties');
+  console.log('\n📋 Manual Trigger:');
+  console.log(`  GET http://localhost:${PORT}/api/admin/check-property-status`);
+  console.log('========================================\n');
+});
+
+// ⭐ NEW: Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('\n⚠️  SIGTERM received. Shutting down gracefully...');
+  mongoose.connection.close(() => {
+    console.log('✅ MongoDB connection closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('\n⚠️  SIGINT received. Shutting down gracefully...');
+  mongoose.connection.close(() => {
+    console.log('✅ MongoDB connection closed');
+    process.exit(0);
+  });
 });
