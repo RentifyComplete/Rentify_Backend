@@ -14,6 +14,7 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const User = require('../models/user');
 const Property = require('../models/Property'); // ⭐ FIXED: Loaded once at top
+const Booking = require('../models/Booking'); // ⭐ ADDED: For tenant rent payments
 
 // ========================================
 // RAZORPAY INITIALIZATION
@@ -1132,7 +1133,6 @@ router.post('/create-tenant-rent-order', async (req, res) => {
     }
     
     // Get booking
-    const Booking = require('../models/Booking');
     const booking = await Booking.findById(bookingId);
     
     if (!booking) {
@@ -1269,7 +1269,6 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
     console.log('✅ Payment signature verified');
     
     // Get booking
-    const Booking = require('../models/Booking');
     const booking = await Booking.findById(bookingId);
     
     if (!booking) {
