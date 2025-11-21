@@ -518,6 +518,7 @@ router.post('/verify-payment', async (req, res) => {
 
 // ========================================
 // CREATE TENANT RENT ORDER WITH AUTO-TRANSFER
+// ⭐ NEW: Includes 2.7% convenience fee
 // ========================================
 router.post('/create-tenant-order', async (req, res) => {
   try {
@@ -529,8 +530,17 @@ router.post('/create-tenant-order', async (req, res) => {
       tenantPhone,
       monthlyRent,
       securityDeposit,
+      convenienceFee, // ⭐ NEW
       propertyTitle,
     } = req.body;
+
+    console.log('💰 ==================== TENANT ORDER ====================');
+    console.log('Property ID:', propertyId);
+    console.log('Owner ID:', ownerId);
+    console.log('Monthly Rent: ₹' + monthlyRent);
+    console.log('Security Deposit: ₹' + securityDeposit);
+    console.log('Convenience Fee (2.7%): ₹' + convenienceFee); // ⭐ NEW
+    console.log('Total: ₹' + (parseInt(monthlyRent) + parseInt(securityDeposit) + parseInt(convenienceFee || 0)));
 
     if (!propertyId || !ownerId || !monthlyRent || !securityDeposit) {
       return res.status(400).json({
@@ -539,7 +549,9 @@ router.post('/create-tenant-order', async (req, res) => {
       });
     }
 
-    const totalAmount = parseInt(monthlyRent) + parseInt(securityDeposit);
+    const baseAmount = parseInt(monthlyRent) + parseInt(securityDeposit);
+    const feeAmount = parseInt(convenienceFee || 0);
+    const totalAmount = baseAmount + feeAmount;
 
     if (totalAmount < 1) {
       return res.status(400).json({
@@ -559,9 +571,12 @@ router.post('/create-tenant-order', async (req, res) => {
 
     const amountInPaise = totalAmount * 100;
     
+    // ⭐ IMPORTANT: Only transfer base amount to owner (not including convenience fee)
+    const ownerTransferAmount = baseAmount * 100;
+    
     if (ROUTE_API_AVAILABLE && owner.razorpayFundAccountId) {
       const orderOptions = {
-        amount: amountInPaise,
+        amount: amountInPaise, // Total amount (including fee)
         currency: 'INR',
         receipt: `tenant_rent_${Date.now()}`,
         notes: {
@@ -571,13 +586,20 @@ router.post('/create-tenant-order', async (req, res) => {
           propertyTitle: propertyTitle || 'Property',
           monthlyRent,
           securityDeposit,
+          convenienceFee: feeAmount, // ⭐ Store fee
+          baseAmount: baseAmount,
+          totalAmount: totalAmount,
         },
         transfers: [
           {
             account: owner.razorpayFundAccountId,
-            amount: amountInPaise,
+            amount: ownerTransferAmount, // ⭐ Only base amount to owner
             currency: 'INR',
-            notes: { propertyId, rentPayment: true },
+            notes: { 
+              propertyId, 
+              rentPayment: true,
+              excludesConvenienceFee: true 
+            },
             on_hold: 0,
           }
         ]
@@ -585,11 +607,15 @@ router.post('/create-tenant-order', async (req, res) => {
 
       const order = await razorpay.orders.create(orderOptions);
       console.log('✅ Tenant order created with auto-transfer:', order.id);
+      console.log('💸 Owner receives: ₹' + baseAmount);
+      console.log('💰 Platform keeps: ₹' + feeAmount);
 
       return res.status(200).json({
         success: true,
         orderId: order.id,
         amount: totalAmount,
+        baseAmount: baseAmount,
+        convenienceFee: feeAmount,
         currency: 'INR',
         key: process.env.RAZORPAY_KEY_ID,
         autoTransferEnabled: true,
@@ -607,15 +633,21 @@ router.post('/create-tenant-order', async (req, res) => {
         propertyTitle: propertyTitle || 'Property',
         monthlyRent,
         securityDeposit,
+        convenienceFee: feeAmount, // ⭐ Store fee
+        baseAmount: baseAmount,
+        totalAmount: totalAmount,
       },
     });
 
     console.log('✅ Tenant order created (manual payout):', order.id);
+    console.log('💰 ==================== ORDER SUCCESS ====================\n');
 
     res.status(200).json({
       success: true,
       orderId: order.id,
       amount: totalAmount,
+      baseAmount: baseAmount,
+      convenienceFee: feeAmount,
       currency: 'INR',
       key: process.env.RAZORPAY_KEY_ID,
       autoTransferEnabled: false,
