@@ -84,6 +84,12 @@ app.use('/api/properties', propertyRoutes);
 const bookingRoutes = require('./routes/booking');
 app.use('/api/bookings', bookingRoutes);
 
+// Add this import
+const bookingRequestRoutes = require('./routes/booking-request');
+
+// Add this route registration
+app.use('/api/booking-requests', bookingRequestRoutes);
+
 // ⭐ NEW: Admin endpoint to manually trigger property status check
 app.get('/api/admin/check-property-status', async (req, res) => {
   try {
