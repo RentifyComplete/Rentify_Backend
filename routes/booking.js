@@ -15,7 +15,7 @@ const bookingSchema = new mongoose.Schema({
   tenantPhone: { type: String, required: true },
   monthlyRent: { type: Number, required: true },
   securityDeposit: { type: Number, required: true },
-  convenienceFee: { type: Number, default: 0 }, // ⭐ NEW: 2.7% convenience fee
+  convenienceFee: { type: Number, default: 0 }, // ⭐ 2.7% convenience fee
   totalAmount: { type: Number, required: true },
   moveInDate: { type: Date, required: true },
   leaseDuration: { type: Number, required: true },
@@ -25,10 +25,56 @@ const bookingSchema = new mongoose.Schema({
   status: { type: String, default: 'active' },
   pendingDues: { type: Number, default: 0 },
   underNotice: { type: Boolean, default: false },
+  
+  // ⭐ NEW: Rent payment tracking
+  rentDueDate: { type: Date, default: null }, // Next rent due date
+  lastRentPayment: { type: Date, default: null }, // Last rent payment date
+  rentPaymentHistory: [{
+    amount: Number,
+    monthsPaid: Number,
+    convenienceFee: Number,
+    paymentId: String,
+    orderId: String,
+    paidAt: { type: Date, default: Date.now }
+  }],
+  
   bookingDate: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
+
+// ⭐ Method to record rent payment and extend due date
+bookingSchema.methods.recordRentPayment = async function(paymentData) {
+  const { amount, monthsPaid, convenienceFee, paymentId, orderId } = paymentData;
+  
+  // Add to payment history
+  this.rentPaymentHistory.push({
+    amount,
+    monthsPaid,
+    convenienceFee,
+    paymentId,
+    orderId,
+    paidAt: new Date()
+  });
+  
+  // Update last payment date
+  this.lastRentPayment = new Date();
+  
+  // Calculate new due date
+  const currentDueDate = this.rentDueDate || new Date();
+  const newDueDate = new Date(currentDueDate);
+  newDueDate.setMonth(newDueDate.getMonth() + monthsPaid);
+  this.rentDueDate = newDueDate;
+  
+  // Update status
+  this.status = 'active';
+  this.pendingDues = 0;
+  this.updatedAt = new Date();
+  
+  await this.save();
+  
+  console.log(`✅ Rent payment recorded: ${monthsPaid} month(s) paid, new due date: ${newDueDate}`);
+};
 
 const Booking = mongoose.model('Booking', bookingSchema);
 
@@ -74,6 +120,14 @@ router.post('/create', async (req, res) => {
     console.log('   Convenience Fee (2.7%): ₹' + convenienceFee);
     console.log('   Total: ₹' + totalAmount);
 
+    // ⭐ Calculate first rent due date (1 month after move-in date)
+    const moveIn = new Date(moveInDate);
+    const firstRentDueDate = new Date(moveIn);
+    firstRentDueDate.setMonth(firstRentDueDate.getMonth() + 1);
+
+    console.log('📅 Move-in date:', moveIn);
+    console.log('📅 First rent due date:', firstRentDueDate);
+
     // Create booking
     const booking = new Booking({
       propertyId,
@@ -94,6 +148,9 @@ router.post('/create', async (req, res) => {
       status: 'active',
       pendingDues: 0,
       underNotice: false,
+      rentDueDate: firstRentDueDate, // ⭐ Set first rent due date
+      lastRentPayment: null,
+      rentPaymentHistory: [],
     });
 
     await booking.save();
@@ -164,9 +221,54 @@ router.get('/tenant/:tenantEmail', async (req, res) => {
 
     console.log(`✅ Found ${bookings.length} bookings for tenant`);
 
+    // ⭐ Fetch property details for each booking
+    const Property = mongoose.model('Property');
+    const bookingsWithDetails = await Promise.all(
+      bookings.map(async (booking) => {
+        try {
+          const property = await Property.findById(booking.propertyId);
+          
+          return {
+            _id: booking._id,
+            propertyId: booking.propertyId,
+            propertyTitle: property ? property.title : 'Property',
+            propertyAddress: property 
+              ? `${property.address || ''}, ${property.city || ''}, ${property.state || ''}`
+              : 'Address not available',
+            tenantName: booking.tenantName,
+            tenantEmail: booking.tenantEmail,
+            tenantPhone: booking.tenantPhone,
+            monthlyRent: booking.monthlyRent,
+            securityDeposit: booking.securityDeposit,
+            convenienceFee: booking.convenienceFee,
+            totalAmount: booking.totalAmount,
+            moveInDate: booking.moveInDate,
+            leaseDuration: booking.leaseDuration,
+            status: booking.status,
+            rentDueDate: booking.rentDueDate,
+            lastRentPayment: booking.lastRentPayment,
+            rentPaymentHistory: booking.rentPaymentHistory,
+            bookingDate: booking.bookingDate,
+          };
+        } catch (err) {
+          console.error(`Error fetching property for booking ${booking._id}:`, err);
+          return {
+            _id: booking._id,
+            propertyId: booking.propertyId,
+            propertyTitle: 'Property',
+            propertyAddress: 'Address not available',
+            monthlyRent: booking.monthlyRent,
+            rentDueDate: booking.rentDueDate,
+            lastRentPayment: booking.lastRentPayment,
+            status: booking.status,
+          };
+        }
+      })
+    );
+
     res.status(200).json({
       success: true,
-      bookings: bookings,
+      bookings: bookingsWithDetails,
     });
   } catch (error) {
     console.error('❌ Error fetching tenant bookings:', error);
