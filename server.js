@@ -155,18 +155,27 @@ app.listen(PORT, () => {
 });
 
 // ⭐ NEW: Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('\n⚠️  SIGTERM received. Shutting down gracefully...');
-  mongoose.connection.close(() => {
+// NEW (CORRECT):
+process.on('SIGTERM', async () => {
+  console.log('⚠️  SIGTERM received. Shutting down gracefully...');
+  try {
+    await mongoose.connection.close(); // ✅ No callback, use await
     console.log('✅ MongoDB connection closed');
     process.exit(0);
-  });
+  } catch (error) {
+    console.error('❌ Error during shutdown:', error);
+    process.exit(1);
+  }
 });
 
-process.on('SIGINT', () => {
-  console.log('\n⚠️  SIGINT received. Shutting down gracefully...');
-  mongoose.connection.close(() => {
+process.on('SIGINT', async () => {
+  console.log('⚠️  SIGINT received. Shutting down gracefully...');
+  try {
+    await mongoose.connection.close(); // ✅ No callback, use await
     console.log('✅ MongoDB connection closed');
     process.exit(0);
-  });
+  } catch (error) {
+    console.error('❌ Error during shutdown:', error);
+    process.exit(1);
+  }
 });
