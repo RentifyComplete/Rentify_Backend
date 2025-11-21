@@ -1,4 +1,3 @@
-// Updated: 2025-11-21 08:34:33
 // ========================================
 // UPDATED PROPERTY MODEL - WITH MONTHLY SUBSCRIPTION
 // File: models/property.js
@@ -7,6 +6,38 @@
 // ========================================
 
 const mongoose = require('mongoose');
+
+// ⭐ Define payment history subdocument schema explicitly
+const paymentHistorySchema = new mongoose.Schema({
+  amount: { 
+    type: Number, 
+    required: [true, 'Payment amount is required']
+  },
+  monthsPaid: { 
+    type: Number, 
+    required: [true, 'Months paid is required']
+  },
+  paidAt: { 
+    type: Date, 
+    default: Date.now 
+  },
+  paymentId: { 
+    type: String,
+    default: ''
+  },
+  orderId: { 
+    type: String,
+    default: ''
+  },
+  validUntil: { 
+    type: Date 
+  },
+  status: {
+    type: String,
+    enum: ['completed', 'failed', 'pending'],
+    default: 'completed'
+  }
+}, { _id: true });
 
 const propertySchema = new mongoose.Schema(
   {
@@ -50,19 +81,7 @@ const propertySchema = new mongoose.Schema(
       required: true,
       default: 18 // Base charge per bed/bhk
     },
-    servicePaymentHistory: [{
-      amount: { type: Number, required: true },
-      monthsPaid: { type: Number, required: true }, // 1, 3, 6, or 12
-      paidAt: { type: Date, default: Date.now },
-      paymentId: String,
-      orderId: String,
-      validUntil: Date, // When this payment expires
-      status: {
-        type: String,
-        enum: ['completed', 'failed', 'pending'],
-        default: 'completed'
-      }
-    }],
+    servicePaymentHistory: [paymentHistorySchema], // ⭐ Use explicit schema
     gracePeriodEndsAt: { 
       type: Date,
       default: null // Set when payment becomes overdue
@@ -137,8 +156,8 @@ propertySchema.methods.recordPayment = function(paymentData) {
   console.log('💰 Extracted amount:', amount);
   console.log('📅 Extracted monthsPaid:', monthsPaid);
   
-  if (!amount || !monthsPaid) {
-    throw new Error('Invalid payment data: amount and monthsPaid are required');
+  if (!amount || !monthsPaid || isNaN(amount) || isNaN(monthsPaid)) {
+    throw new Error(`Invalid payment data: amount=${amount}, monthsPaid=${monthsPaid}`);
   }
   
   // Calculate new due date
@@ -149,7 +168,7 @@ propertySchema.methods.recordPayment = function(paymentData) {
   console.log('📅 Current due date:', currentDueDate);
   console.log('📅 New due date:', newDueDate);
   
-  // Create payment history entry
+  // Create payment history entry with explicit field assignment
   const paymentEntry = {
     amount: amount,
     monthsPaid: monthsPaid,
@@ -160,9 +179,14 @@ propertySchema.methods.recordPayment = function(paymentData) {
     status: 'completed'
   };
   
-  console.log('💾 Payment entry to save:', paymentEntry);
+  console.log('💾 Payment entry to save:', JSON.stringify(paymentEntry, null, 2));
   
-  // Add to payment history
+  // Validate before pushing
+  if (!paymentEntry.amount || !paymentEntry.monthsPaid) {
+    throw new Error('Payment entry validation failed before push');
+  }
+  
+  // Add to payment history using create() to trigger subdocument validation
   this.servicePaymentHistory.push(paymentEntry);
   
   // Update fields
@@ -175,6 +199,9 @@ propertySchema.methods.recordPayment = function(paymentData) {
   this.suspensionReason = null;
   
   console.log('✅ Property updated, saving...');
+  console.log('📊 Payment history length:', this.servicePaymentHistory.length);
+  console.log('📊 Last entry:', JSON.stringify(this.servicePaymentHistory[this.servicePaymentHistory.length - 1], null, 2));
+  
   return this.save();
 };
 
@@ -219,5 +246,3 @@ propertySchema.statics.suspendOverdueProperties = async function() {
 };
 
 module.exports = mongoose.model('Property', propertySchema, 'properties');
-
-
