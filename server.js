@@ -1,3 +1,4 @@
+// Updated: 2025-11-21 08:51:47
 // ========================================
 // FINAL SERVER.JS - WITH SUBSCRIPTION CRON JOB
 // ✅ Includes property status checking
