@@ -1,4 +1,6 @@
 // routes/booking.js
+// ⭐ UPDATED: Now includes 2.7% convenience fee tracking
+
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
@@ -13,6 +15,7 @@ const bookingSchema = new mongoose.Schema({
   tenantPhone: { type: String, required: true },
   monthlyRent: { type: Number, required: true },
   securityDeposit: { type: Number, required: true },
+  convenienceFee: { type: Number, default: 0 }, // ⭐ NEW: 2.7% convenience fee
   totalAmount: { type: Number, required: true },
   moveInDate: { type: Date, required: true },
   leaseDuration: { type: Number, required: true },
@@ -60,6 +63,17 @@ router.post('/create', async (req, res) => {
       });
     }
 
+    // ⭐ Calculate convenience fee (2.7%)
+    const baseAmount = monthlyRent + securityDeposit;
+    const convenienceFee = Math.round((baseAmount * 2.7) / 100);
+    const totalAmount = baseAmount + convenienceFee;
+
+    console.log('💰 Payment breakdown:');
+    console.log('   Monthly Rent: ₹' + monthlyRent);
+    console.log('   Security Deposit: ₹' + securityDeposit);
+    console.log('   Convenience Fee (2.7%): ₹' + convenienceFee);
+    console.log('   Total: ₹' + totalAmount);
+
     // Create booking
     const booking = new Booking({
       propertyId,
@@ -70,7 +84,8 @@ router.post('/create', async (req, res) => {
       tenantPhone,
       monthlyRent,
       securityDeposit,
-      totalAmount: monthlyRent + securityDeposit,
+      convenienceFee, // ⭐ Store convenience fee
+      totalAmount,
       moveInDate,
       leaseDuration,
       notes: notes || '',
