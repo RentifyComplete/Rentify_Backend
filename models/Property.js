@@ -1,3 +1,4 @@
+// Updated: 2025-11-21 08:34:33
 // ========================================
 // UPDATED PROPERTY MODEL - WITH MONTHLY SUBSCRIPTION
 // File: models/property.js
@@ -196,3 +197,4 @@ propertySchema.statics.suspendOverdueProperties = async function() {
 };
 
 module.exports = mongoose.model('Property', propertySchema, 'properties');
+
