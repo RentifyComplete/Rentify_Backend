@@ -126,23 +126,44 @@ propertySchema.methods.getPaymentStatus = function() {
 
 // ⭐ METHOD: Update payment and extend service date
 propertySchema.methods.recordPayment = function(paymentData) {
-  const { amount, monthsPaid, paymentId, orderId } = paymentData;
+  console.log('🔍 recordPayment called with:', paymentData);
+  
+  // Explicitly extract and validate fields
+  const amount = Number(paymentData.amount);
+  const monthsPaid = Number(paymentData.monthsPaid);
+  const paymentId = String(paymentData.paymentId || '');
+  const orderId = String(paymentData.orderId || '');
+  
+  console.log('💰 Extracted amount:', amount);
+  console.log('📅 Extracted monthsPaid:', monthsPaid);
+  
+  if (!amount || !monthsPaid) {
+    throw new Error('Invalid payment data: amount and monthsPaid are required');
+  }
   
   // Calculate new due date
   const currentDueDate = this.serviceDueDate || new Date();
   const newDueDate = new Date(currentDueDate);
   newDueDate.setMonth(newDueDate.getMonth() + monthsPaid);
   
-  // Add to payment history
-  this.servicePaymentHistory.push({
-    amount,
-    monthsPaid,
+  console.log('📅 Current due date:', currentDueDate);
+  console.log('📅 New due date:', newDueDate);
+  
+  // Create payment history entry
+  const paymentEntry = {
+    amount: amount,
+    monthsPaid: monthsPaid,
     paidAt: new Date(),
-    paymentId,
-    orderId,
+    paymentId: paymentId,
+    orderId: orderId,
     validUntil: newDueDate,
     status: 'completed'
-  });
+  };
+  
+  console.log('💾 Payment entry to save:', paymentEntry);
+  
+  // Add to payment history
+  this.servicePaymentHistory.push(paymentEntry);
   
   // Update fields
   this.serviceDueDate = newDueDate;
@@ -153,6 +174,7 @@ propertySchema.methods.recordPayment = function(paymentData) {
   this.suspendedAt = null;
   this.suspensionReason = null;
   
+  console.log('✅ Property updated, saving...');
   return this.save();
 };
 
@@ -197,4 +219,5 @@ propertySchema.statics.suspendOverdueProperties = async function() {
 };
 
 module.exports = mongoose.model('Property', propertySchema, 'properties');
+
 
