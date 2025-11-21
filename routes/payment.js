@@ -14,7 +14,7 @@ const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const User = require('../models/user');
 const Property = require('../models/Property'); // ⭐ FIXED: Loaded once at top
-const Booking = require('../models/Booking'); // ⭐ ADDED: For tenant rent payments
+const Booking = require('../models/booking'); // ⭐ ADDED: For tenant rent payments
 
 // ========================================
 // RAZORPAY INITIALIZATION
