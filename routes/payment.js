@@ -1091,3 +1091,256 @@ router.get('/transfer-status/:paymentId', async (req, res) => {
 });
 
 module.exports = router;
+
+// ========================================
+// TENANT RENT PAYMENT (MONTHLY)
+// Similar to owner service charge but for tenants
+// ⭐ Includes 2.7% convenience fee + duration options
+// ========================================
+
+// Tenant rent pricing (1/3/6/12 months)
+const TENANT_RENT_PRICING = {
+  1: { months: 1, discount: 0 },
+  3: { months: 3, discount: 5 },  // 5% discount for 3 months
+  6: { months: 6, discount: 10 }, // 10% discount for 6 months
+  12: { months: 12, discount: 15 } // 15% discount for 12 months
+};
+
+router.post('/create-tenant-rent-order', async (req, res) => {
+  try {
+    const { bookingId, propertyId, monthsDuration, couponCode } = req.body;
+    
+    console.log('💰 ==================== TENANT RENT ORDER ====================');
+    console.log('Booking ID:', bookingId);
+    console.log('Property ID:', propertyId);
+    console.log('Months Duration:', monthsDuration);
+    console.log('Coupon Code:', couponCode || 'None');
+    
+    // Validation
+    if (!bookingId || !propertyId || !monthsDuration) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: bookingId, propertyId, monthsDuration'
+      });
+    }
+    
+    if (![1, 3, 6, 12].includes(parseInt(monthsDuration))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid duration. Must be 1, 3, 6, or 12 months'
+      });
+    }
+    
+    // Get booking
+    const Booking = require('../models/Booking');
+    const booking = await Booking.findById(bookingId);
+    
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+    
+    // Calculate amount
+    const pricing = TENANT_RENT_PRICING[monthsDuration];
+    const monthlyRent = booking.monthlyRent;
+    const baseAmount = monthlyRent * pricing.months;
+    
+    // Apply duration discount
+    const durationDiscount = Math.round((baseAmount * pricing.discount) / 100);
+    const afterDurationDiscount = baseAmount - durationDiscount;
+    
+    // Add 2.7% convenience fee
+    const convenienceFee = Math.round((afterDurationDiscount * 2.7) / 100);
+    let finalAmount = afterDurationDiscount + convenienceFee;
+    
+    console.log('💵 Calculation:');
+    console.log('   Monthly Rent: ₹' + monthlyRent);
+    console.log('   Months: ' + pricing.months);
+    console.log('   Base Amount: ₹' + baseAmount);
+    console.log('   Duration Discount (' + pricing.discount + '%): -₹' + durationDiscount);
+    console.log('   After Discount: ₹' + afterDurationDiscount);
+    console.log('   Convenience Fee (2.7%): +₹' + convenienceFee);
+    console.log('   Final Amount: ₹' + finalAmount);
+    
+    // ⭐ Apply coupon if provided
+    const couponResult = validateAndApplyCoupon(finalAmount, couponCode);
+    
+    if (!couponResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: couponResult.error,
+      });
+    }
+
+    if (couponResult.finalAmount !== finalAmount) {
+      console.log('🎟️ Coupon Applied:', couponResult.couponCode);
+      console.log('💸 Coupon Discount:', couponResult.discountPercent + '%');
+      finalAmount = couponResult.finalAmount;
+      console.log('💰 New Final Amount: ₹' + finalAmount);
+    }
+    
+    // Create Razorpay order
+    const amountInPaise = Math.round(finalAmount * 100);
+    
+    const order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: 'INR',
+      receipt: `rent_${Date.now()}`,
+      notes: {
+        type: 'tenant_rent_payment',
+        bookingId: bookingId,
+        propertyId: propertyId,
+        tenantEmail: booking.tenantEmail,
+        monthsDuration: pricing.months,
+        monthlyRent: monthlyRent,
+        baseAmount: baseAmount,
+        durationDiscount: durationDiscount,
+        convenienceFee: convenienceFee,
+        couponCode: couponResult.couponCode || 'none',
+        couponDiscount: couponResult.discount || 0,
+        finalAmount: finalAmount,
+      },
+    });
+    
+    console.log('✅ Order created:', order.id);
+    console.log('💰 ==================== ORDER SUCCESS ====================\n');
+    
+    res.status(200).json({
+      success: true,
+      orderId: order.id,
+      amount: finalAmount,
+      baseAmount: afterDurationDiscount,
+      convenienceFee: convenienceFee,
+      durationDiscount: durationDiscount,
+      couponDiscount: couponResult.discount || 0,
+      couponPercent: couponResult.discountPercent || 0,
+      couponCode: couponResult.couponCode,
+      monthsDuration: pricing.months,
+      currency: 'INR',
+      key: process.env.RAZORPAY_KEY_ID,
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creating tenant rent order:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create order',
+      error: error.message,
+    });
+  }
+});
+
+// ========================================
+// VERIFY TENANT RENT PAYMENT & UPDATE BOOKING
+// ========================================
+router.post('/verify-tenant-rent-payment', async (req, res) => {
+  try {
+    const { 
+      razorpay_order_id, 
+      razorpay_payment_id, 
+      razorpay_signature,
+      bookingId,
+      monthsDuration 
+    } = req.body;
+    
+    console.log('🔍 ==================== VERIFY RENT PAYMENT ====================');
+    console.log('Order ID:', razorpay_order_id);
+    console.log('Payment ID:', razorpay_payment_id);
+    console.log('Booking ID:', bookingId);
+    console.log('Months Duration:', monthsDuration);
+    
+    // Verify signature
+    const sign = razorpay_order_id + '|' + razorpay_payment_id;
+    const expectedSign = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(sign.toString())
+      .digest('hex');
+    
+    if (razorpay_signature !== expectedSign) {
+      console.error('❌ Invalid payment signature');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid signature' 
+      });
+    }
+    
+    console.log('✅ Payment signature verified');
+    
+    // Get booking
+    const Booking = require('../models/Booking');
+    const booking = await Booking.findById(bookingId);
+    
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+    
+    console.log('📋 Booking found for tenant:', booking.tenantEmail);
+    console.log('📅 Current due date:', booking.rentDueDate);
+    
+    // Get pricing
+    const monthsDurationInt = parseInt(monthsDuration);
+    const pricing = TENANT_RENT_PRICING[monthsDurationInt];
+    
+    if (!pricing) {
+      console.error('❌ Invalid months duration:', monthsDuration);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid months duration: ' + monthsDuration
+      });
+    }
+    
+    // Calculate amounts
+    const baseAmount = booking.monthlyRent * pricing.months;
+    const durationDiscount = Math.round((baseAmount * pricing.discount) / 100);
+    const afterDiscount = baseAmount - durationDiscount;
+    const convenienceFee = Math.round((afterDiscount * 2.7) / 100);
+    const totalAmount = afterDiscount + convenienceFee;
+    
+    // Record payment
+    const paymentData = {
+      amount: totalAmount,
+      monthsPaid: pricing.months,
+      convenienceFee: convenienceFee,
+      paymentId: razorpay_payment_id,
+      orderId: razorpay_order_id
+    };
+    
+    console.log('💾 Recording rent payment:', JSON.stringify(paymentData, null, 2));
+    
+    try {
+      await booking.recordRentPayment(paymentData);
+      console.log('✅ Rent payment recorded, due date extended by ' + pricing.months + ' months');
+      console.log('📅 New due date:', booking.rentDueDate);
+    } catch (saveError) {
+      console.error('❌ Error saving rent payment:', saveError);
+      return res.status(500).json({
+        success: false,
+        message: 'Payment verified but failed to update booking',
+        error: saveError.message
+      });
+    }
+    
+    console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
+    
+    res.json({ 
+      success: true, 
+      paymentId: razorpay_payment_id,
+      verified: true,
+      newDueDate: booking.rentDueDate,
+      status: booking.status,
+      message: `Rent paid for ${pricing.months} month(s)`
+    });
+    
+  } catch (error) {
+    console.error('❌ Error verifying rent payment:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
