@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Property = require('../models/Property');
+const User = require('../models/user'); // ⭐ ADD THIS IMPORT
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const fs = require('fs');
@@ -346,6 +347,54 @@ router.get('/owner/:ownerId', async (req, res) => {
       success: false,
       message: 'Failed to fetch properties',
       error: error.message,
+    });
+  }
+});
+
+// ⭐ NEW ENDPOINT: GET user details by ID (includes phone number)
+router.get('/api/users/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    
+    console.log(`📞 Fetching user details for ID: ${userId}`);
+    
+    // Find user in database
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      console.log(`⚠️ User not found: ${userId}`);
+      return res.status(404).json({ 
+        success: false,
+        message: 'User not found' 
+      });
+    }
+    
+    // Log successful retrieval
+    console.log(`✅ User found: ${user.name}`);
+    console.log(`   Phone: ${user.phone}`);
+    
+    // Return user data with phone number
+    res.status(200).json({
+      success: true,
+      data: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,           // ⭐ IMPORTANT: Phone number
+        phoneNumber: user.phone,     // ⭐ Alternative field name
+        mobileNumber: user.phone,    // ⭐ Alternative field name
+        profileImage: user.profileImage || null,
+        verified: user.verified || false,
+        createdAt: user.createdAt,
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching user:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error fetching user',
+      error: error.message 
     });
   }
 });
