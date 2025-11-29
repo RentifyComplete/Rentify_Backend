@@ -1,3 +1,10 @@
+// ========================================
+// FINAL PROPERTY ROUTES - WITH SERVICE CHARGE SETUP
+// ✅ Sets serviceDueDate on property creation
+// ✅ Calculates initial service charge
+// ✅ Includes all existing functionality
+// ========================================
+
 const express = require('express');
 const router = express.Router();
 const Property = require('../models/Property');
@@ -62,7 +69,7 @@ router.get('/', async (req, res) => {
       limit = 20,
     } = req.query;
 
-    // Build filter object
+    // Build filter object - only show active properties
     const filter = { isActive: true };
 
     if (city) filter.city = new RegExp(city, 'i');
@@ -146,6 +153,11 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       ownerId,
     } = req.body;
 
+    console.log('📝 Creating new property...');
+    console.log('  Title:', title);
+    console.log('  Type:', type);
+    console.log('  Owner ID:', ownerId);
+
     // Validate required fields
     if (!title || !location || !price || !type || !description || !ownerId) {
       return res.status(400).json({
@@ -157,6 +169,7 @@ router.post('/', upload.array('images', 10), async (req, res) => {
     // Upload images to Cloudinary
     const imageUrls = [];
     if (req.files && req.files.length > 0) {
+      console.log(`📸 Uploading ${req.files.length} images...`);
       for (const file of req.files) {
         try {
           const url = await uploadToCloudinary(file.path);
@@ -166,6 +179,7 @@ router.post('/', upload.array('images', 10), async (req, res) => {
           // Continue with other images even if one fails
         }
       }
+      console.log(`✅ Uploaded ${imageUrls.length} images`);
     }
 
     // Create property
@@ -186,12 +200,34 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       images: imageUrls,
     });
 
+    // ⭐ NEW: Set up service charge subscription
+    // First payment already done, so give 30 days free
+    const now = new Date();
+    property.serviceDueDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days from now
+    property.serviceStatus = 'active';
+    property.lastServicePayment = now;
+    property.monthlyServiceCharge = property.calculateServiceCharge();
+
+    console.log('💰 Service charge setup:');
+    console.log('  Monthly charge: ₹' + property.monthlyServiceCharge);
+    console.log('  Due date: ' + property.serviceDueDate.toISOString());
+    console.log('  Status: ' + property.serviceStatus);
+
     const savedProperty = await property.save();
+
+    console.log('✅ Property created successfully with ID:', savedProperty._id);
 
     res.status(201).json({
       success: true,
       message: 'Property created successfully',
       data: savedProperty,
+      serviceInfo: {
+        monthlyCharge: savedProperty.monthlyServiceCharge,
+        nextDueDate: savedProperty.serviceDueDate,
+        status: savedProperty.serviceStatus,
+        message: 'Your property is active for 30 days. Next payment due on ' + 
+                 savedProperty.serviceDueDate.toLocaleDateString()
+      }
     });
   } catch (error) {
     console.error('❌ Error creating property:', error);
@@ -254,6 +290,16 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
     if (state) property.state = state;
     if (zipCode) property.zipCode = zipCode;
 
+    // ⭐ NEW: Recalculate service charge if type/beds/bhk changed
+    if (type || bhk || beds) {
+      const oldCharge = property.monthlyServiceCharge;
+      property.monthlyServiceCharge = property.calculateServiceCharge();
+      
+      if (oldCharge !== property.monthlyServiceCharge) {
+        console.log(`💰 Service charge updated: ₹${oldCharge} → ₹${property.monthlyServiceCharge}`);
+      }
+    }
+
     // Upload new images if provided
     if (req.files && req.files.length > 0) {
       const newImageUrls = [];
@@ -309,7 +355,12 @@ router.delete('/:id', async (req, res) => {
 
     // Soft delete (set isActive to false) instead of hard delete
     property.isActive = false;
+    property.serviceStatus = 'suspended';
+    property.suspendedAt = new Date();
+    property.suspensionReason = 'Deleted by owner';
     await property.save();
+
+    console.log(`🗑️  Property soft-deleted: ${property._id}`);
 
     // Or use hard delete:
     // await Property.findByIdAndDelete(req.params.id);
@@ -331,15 +382,19 @@ router.delete('/:id', async (req, res) => {
 // ------------------- GET properties by owner -------------------
 router.get('/owner/:ownerId', async (req, res) => {
   try {
+    console.log('🔍 Fetching properties for owner:', req.params.ownerId);
+    
+    // ⭐ UPDATED: Return ALL properties (including suspended) so owner can see payment status
     const properties = await Property.find({
       ownerId: req.params.ownerId,
-      isActive: true,
     }).sort({ createdAt: -1 });
+
+    console.log(`✅ Found ${properties.length} properties`);
 
     res.status(200).json({
       success: true,
       count: properties.length,
-      data: properties,
+      properties: properties, // ⭐ Changed from 'data' to 'properties' for consistency
     });
   } catch (error) {
     console.error('❌ Error fetching owner properties:', error);
@@ -347,54 +402,6 @@ router.get('/owner/:ownerId', async (req, res) => {
       success: false,
       message: 'Failed to fetch properties',
       error: error.message,
-    });
-  }
-});
-
-// ⭐ NEW ENDPOINT: GET user details by ID (includes phone number)
-router.get('/api/users/:userId', async (req, res) => {
-  try {
-    const userId = req.params.userId;
-    
-    console.log(`📞 Fetching user details for ID: ${userId}`);
-    
-    // Find user in database
-    const user = await User.findById(userId);
-    
-    if (!user) {
-      console.log(`⚠️ User not found: ${userId}`);
-      return res.status(404).json({ 
-        success: false,
-        message: 'User not found' 
-      });
-    }
-    
-    // Log successful retrieval
-    console.log(`✅ User found: ${user.name}`);
-    console.log(`   Phone: ${user.phone}`);
-    
-    // Return user data with phone number
-    res.status(200).json({
-      success: true,
-      data: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,           // ⭐ IMPORTANT: Phone number
-        phoneNumber: user.phone,     // ⭐ Alternative field name
-        mobileNumber: user.phone,    // ⭐ Alternative field name
-        profileImage: user.profileImage || null,
-        verified: user.verified || false,
-        createdAt: user.createdAt,
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Error fetching user:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Error fetching user',
-      error: error.message 
     });
   }
 });

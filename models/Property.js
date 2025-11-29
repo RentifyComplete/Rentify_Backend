@@ -1,4 +1,43 @@
+// ========================================
+// UPDATED PROPERTY MODEL - WITH MONTHLY SUBSCRIPTION
+// File: models/property.js
+// ✅ Adds monthly service charge tracking
+// ✅ Auto-deactivation after 10-day grace period
+// ========================================
+
 const mongoose = require('mongoose');
+
+// ⭐ Define payment history subdocument schema explicitly
+const paymentHistorySchema = new mongoose.Schema({
+  amount: { 
+    type: Number, 
+    required: [true, 'Payment amount is required']
+  },
+  monthsPaid: { 
+    type: Number, 
+    required: [true, 'Months paid is required']
+  },
+  paidAt: { 
+    type: Date, 
+    default: Date.now 
+  },
+  paymentId: { 
+    type: String,
+    default: ''
+  },
+  orderId: { 
+    type: String,
+    default: ''
+  },
+  validUntil: { 
+    type: Date 
+  },
+  status: {
+    type: String,
+    enum: ['completed', 'failed', 'pending'],
+    default: 'completed'
+  }
+}, { _id: true });
 
 const propertySchema = new mongoose.Schema(
   {
@@ -6,25 +45,204 @@ const propertySchema = new mongoose.Schema(
     location: { type: String, required: true },
     price: { type: String, required: true },
     type: { type: String, required: true },
-
     bhk: String,
     beds: Number,
     amenities: [String],
     description: { type: String, required: true },
-
     address: String,
     city: String,
     state: String,
     zipCode: String,
-
     ownerId: { type: String, required: true },
     images: [String],
-
     rating: { type: Number, default: 4.5 },
     isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
+    
+    // ⭐ NEW: Service Charge/Subscription Fields
+    serviceDueDate: { 
+      type: Date, 
+      default: function() {
+        // Default: 30 days from property creation (first payment = 1 month)
+        return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      }
+    },
+    serviceStatus: { 
+      type: String, 
+      enum: ['active', 'due', 'overdue', 'suspended'],
+      default: 'active'
+    },
+    lastServicePayment: { 
+      type: Date,
+      default: Date.now // Set to now when property is created
+    },
+    monthlyServiceCharge: {
+      type: Number,
+      required: true,
+      default: 18 // Base charge per bed/bhk
+    },
+    servicePaymentHistory: [paymentHistorySchema], // ⭐ Use explicit schema
+    gracePeriodEndsAt: { 
+      type: Date,
+      default: null // Set when payment becomes overdue
+    },
+    autoRenewal: { 
+      type: Boolean, 
+      default: false 
+    },
+    suspendedAt: {
+      type: Date,
+      default: null
+    },
+    suspensionReason: {
+      type: String,
+      default: null
+    }
   },
   { timestamps: true }
 );
+
+// ⭐ METHOD: Calculate service charge based on property type
+propertySchema.methods.calculateServiceCharge = function() {
+  const RATE_PER_UNIT = 18;
+  let charge = RATE_PER_UNIT;
+  
+  if (this.type === 'PG') {
+    charge = (this.beds || 1) * RATE_PER_UNIT;
+  } else if (this.type === 'Flat' || this.type === 'Apartment') {
+    if (this.bhk) {
+      const match = this.bhk.match(/(\d+)/);
+      if (match) {
+        charge = parseInt(match[1]) * RATE_PER_UNIT;
+      }
+    }
+  }
+  
+  return Math.max(charge, RATE_PER_UNIT);
+};
+
+// ⭐ METHOD: Check if payment is due/overdue
+propertySchema.methods.getPaymentStatus = function() {
+  const now = new Date();
+  const dueDate = this.serviceDueDate;
+  
+  if (!dueDate) {
+    return 'active';
+  }
+  
+  const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
+  
+  if (daysUntilDue > 15) {
+    return 'active';
+  } else if (daysUntilDue > 0) {
+    return 'due'; // Payment due soon (within 15 days)
+  } else if (daysUntilDue >= -10) {
+    return 'overdue'; // Within 10-day grace period
+  } else {
+    return 'suspended'; // Grace period ended
+  }
+};
+
+// ⭐ METHOD: Update payment and extend service date
+propertySchema.methods.recordPayment = function(paymentData) {
+  console.log('🔍 recordPayment called with:', paymentData);
+  
+  // Explicitly extract and validate fields
+  const amount = Number(paymentData.amount);
+  const monthsPaid = Number(paymentData.monthsPaid);
+  const paymentId = String(paymentData.paymentId || '');
+  const orderId = String(paymentData.orderId || '');
+  
+  console.log('💰 Extracted amount:', amount);
+  console.log('📅 Extracted monthsPaid:', monthsPaid);
+  
+  if (!amount || !monthsPaid || isNaN(amount) || isNaN(monthsPaid)) {
+    throw new Error(`Invalid payment data: amount=${amount}, monthsPaid=${monthsPaid}`);
+  }
+  
+  // Calculate new due date
+  const currentDueDate = this.serviceDueDate || new Date();
+  const newDueDate = new Date(currentDueDate);
+  newDueDate.setMonth(newDueDate.getMonth() + monthsPaid);
+  
+  console.log('📅 Current due date:', currentDueDate);
+  console.log('📅 New due date:', newDueDate);
+  
+  // Create payment history entry with explicit field assignment
+  const paymentEntry = {
+    amount: amount,
+    monthsPaid: monthsPaid,
+    paidAt: new Date(),
+    paymentId: paymentId,
+    orderId: orderId,
+    validUntil: newDueDate,
+    status: 'completed'
+  };
+  
+  console.log('💾 Payment entry to save:', JSON.stringify(paymentEntry, null, 2));
+  
+  // Validate before pushing
+  if (!paymentEntry.amount || !paymentEntry.monthsPaid) {
+    throw new Error('Payment entry validation failed before push');
+  }
+  
+  // Add to payment history using create() to trigger subdocument validation
+  this.servicePaymentHistory.push(paymentEntry);
+  
+  // Update fields
+  this.serviceDueDate = newDueDate;
+  this.serviceStatus = 'active';
+  this.lastServicePayment = new Date();
+  this.isActive = true;
+  this.gracePeriodEndsAt = null;
+  this.suspendedAt = null;
+  this.suspensionReason = null;
+  
+  console.log('✅ Property updated, saving...');
+  console.log('📊 Payment history length:', this.servicePaymentHistory.length);
+  console.log('📊 Last entry:', JSON.stringify(this.servicePaymentHistory[this.servicePaymentHistory.length - 1], null, 2));
+  
+  return this.save();
+};
+
+// ⭐ STATIC METHOD: Find properties that need status update
+propertySchema.statics.findPropertiesNeedingUpdate = async function() {
+  const now = new Date();
+  
+  // Find properties where due date has passed
+  const properties = await this.find({
+    serviceDueDate: { $lt: now },
+    serviceStatus: { $ne: 'suspended' }
+  });
+  
+  return properties;
+};
+
+// ⭐ STATIC METHOD: Auto-suspend overdue properties
+propertySchema.statics.suspendOverdueProperties = async function() {
+  const now = new Date();
+  const gracePeriodEnd = new Date(now);
+  gracePeriodEnd.setDate(gracePeriodEnd.getDate() - 10); // 10 days ago
+  
+  const result = await this.updateMany(
+    {
+      serviceDueDate: { $lt: gracePeriodEnd },
+      serviceStatus: { $ne: 'suspended' },
+      isActive: true
+    },
+    {
+      $set: {
+        serviceStatus: 'suspended',
+        isActive: false,
+        suspendedAt: now,
+        suspensionReason: 'Service charge payment overdue (10+ days)',
+        gracePeriodEndsAt: now
+      }
+    }
+  );
+  
+  console.log(`⏸️ Suspended ${result.modifiedCount} properties for non-payment`);
+  return result;
+};
 
 module.exports = mongoose.model('Property', propertySchema, 'properties');
