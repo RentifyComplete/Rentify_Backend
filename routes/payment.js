@@ -1,9 +1,10 @@
 // ========================================
-// COMPLETE BACKEND PAYMENT ROUTES - FINAL VERSION
+// COMPLETE BACKEND PAYMENT ROUTES - FINAL VERSION WITH CAPACITY INCREASE
 // File: routes/payment.js
 // ✅ Supports Owner Service Charge & Tenant Rent Payment with Auto-Transfer
 // ✅ Full coupon support (RENTIFY25, RENTIFY50, RENTIFY100)
 // ✅ Monthly subscription system (1/3/6/12 months)
+// ✅ PG Capacity Increase Payment (NEW)
 // ✅ Fixed receipt ID length (max 40 chars)
 // ✅ Property model loaded at top (single require)
 // ========================================
@@ -370,6 +371,223 @@ router.get('/bank-details/:ownerId', async (req, res) => {
       success: false,
       message: 'Failed to fetch bank details',
       error: error.message,
+    });
+  }
+});
+
+// ========================================
+// ⭐ NEW: CREATE CAPACITY INCREASE ORDER (PG ONLY)
+// For when owner increases number of beds in PG
+// ========================================
+router.post('/create-capacity-increase-order', async (req, res) => {
+  try {
+    const { propertyId, ownerId, additionalCharge, newMonthlyCharge, couponCode } = req.body;
+    
+    console.log('💰 ==================== CAPACITY INCREASE ORDER ====================');
+    console.log('Property ID:', propertyId);
+    console.log('Owner ID:', ownerId);
+    console.log('Additional Charge:', additionalCharge);
+    console.log('New Monthly Charge:', newMonthlyCharge);
+    console.log('Coupon Code:', couponCode || 'None');
+    
+    // Validation
+    if (!propertyId || !ownerId || !additionalCharge || !newMonthlyCharge) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: propertyId, ownerId, additionalCharge, newMonthlyCharge'
+      });
+    }
+    
+    // Verify property exists and belongs to owner
+    const property = await Property.findById(propertyId);
+    
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+    
+    if (property.ownerId !== ownerId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized: You do not own this property'
+      });
+    }
+    
+    // Verify it's a PG property
+    if (property.type !== 'PG') {
+      return res.status(400).json({
+        success: false,
+        message: 'Capacity increase payment is only for PG properties'
+      });
+    }
+    
+    const originalAmount = parseInt(additionalCharge);
+    console.log('Original Amount: ₹' + originalAmount);
+    
+    // ⭐ Apply coupon if provided
+    const couponResult = validateAndApplyCoupon(originalAmount, couponCode);
+    
+    if (!couponResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: couponResult.error,
+      });
+    }
+
+    const finalAmount = couponResult.finalAmount;
+    console.log('Coupon Applied:', couponResult.couponCode || 'None');
+    console.log('Discount:', couponResult.discountPercent + '%');
+    console.log('Final Amount: ₹' + finalAmount);
+    
+    const amountInPaise = Math.round(finalAmount * 100);
+    
+    if (amountInPaise < 100) {
+      return res.status(400).json({
+        success: false,
+        message: `Amount too low: ₹${finalAmount}. Minimum ₹1 required.`,
+      });
+    }
+    
+    // Create Razorpay order
+    const order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: 'INR',
+      receipt: `cap_inc_${Date.now()}`.substring(0, 40), // ⭐ Max 40 chars
+      notes: {
+        type: 'capacity_increase',
+        propertyId: propertyId,
+        ownerId: ownerId,
+        propertyTitle: property.title,
+        propertyType: property.type,
+        oldBeds: property.beds,
+        newMonthlyCharge: newMonthlyCharge,
+        originalAmount: originalAmount,
+        couponCode: couponResult.couponCode || 'none',
+        discountPercent: couponResult.discountPercent || 0,
+        discountAmount: couponResult.discount || 0,
+        finalAmount: finalAmount,
+      },
+    });
+    
+    console.log('✅ Order created:', order.id);
+    console.log('💰 ==================== ORDER SUCCESS ====================\n');
+    
+    res.status(200).json({
+      success: true,
+      orderId: order.id,
+      amount: finalAmount,
+      originalAmount: originalAmount,
+      discount: couponResult.discount,
+      discountPercent: couponResult.discountPercent,
+      couponCode: couponResult.couponCode,
+      currency: 'INR',
+      key: process.env.RAZORPAY_KEY_ID,
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creating capacity increase order:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create payment order',
+      error: error.message,
+    });
+  }
+});
+
+// ========================================
+// ⭐ NEW: VERIFY CAPACITY INCREASE PAYMENT
+// Verifies payment and updates property's monthlyServiceCharge
+// ========================================
+router.post('/verify-capacity-increase-payment', async (req, res) => {
+  try {
+    const { 
+      razorpay_order_id, 
+      razorpay_payment_id, 
+      razorpay_signature,
+      propertyId,
+      additionalCharge,
+      newMonthlyCharge
+    } = req.body;
+    
+    console.log('🔍 ==================== VERIFY CAPACITY INCREASE ====================');
+    console.log('Order ID:', razorpay_order_id);
+    console.log('Payment ID:', razorpay_payment_id);
+    console.log('Property ID:', propertyId);
+    console.log('Additional Charge Paid: ₹' + additionalCharge);
+    console.log('New Monthly Charge: ₹' + newMonthlyCharge);
+    
+    // Verify signature
+    const sign = razorpay_order_id + '|' + razorpay_payment_id;
+    const expectedSign = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(sign.toString())
+      .digest('hex');
+    
+    if (razorpay_signature !== expectedSign) {
+      console.error('❌ Invalid payment signature');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid payment signature' 
+      });
+    }
+    
+    console.log('✅ Payment signature verified');
+    
+    // Fetch payment details from Razorpay to confirm payment status
+    const payment = await razorpay.payments.fetch(razorpay_payment_id);
+    
+    if (payment.status !== 'captured' && payment.status !== 'authorized') {
+      console.error('❌ Payment not successful. Status:', payment.status);
+      return res.status(400).json({
+        success: false,
+        message: 'Payment not completed. Status: ' + payment.status
+      });
+    }
+    
+    console.log('✅ Payment confirmed with Razorpay. Status:', payment.status);
+    
+    // Get property
+    const property = await Property.findById(propertyId);
+    
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+    
+    console.log('📋 Property found:', property.title);
+    console.log('📊 Old Monthly Service Charge: ₹' + (property.monthlyServiceCharge || 'Not set'));
+    
+    // ⭐ Update property's monthlyServiceCharge and lastCapacityUpdate
+    property.monthlyServiceCharge = parseInt(newMonthlyCharge);
+    property.lastCapacityUpdate = new Date();
+    property.updatedAt = new Date();
+    
+    await property.save();
+    
+    console.log('✅ Property updated successfully');
+    console.log('📊 New Monthly Service Charge: ₹' + property.monthlyServiceCharge);
+    console.log('📅 Last Capacity Update: ' + property.lastCapacityUpdate);
+    console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
+    
+    res.json({ 
+      success: true, 
+      paymentId: razorpay_payment_id,
+      verified: true,
+      transactionId: razorpay_payment_id,
+      newMonthlyCharge: property.monthlyServiceCharge,
+      message: 'Payment verified and property capacity updated successfully'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error verifying capacity increase payment:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to verify payment',
+      error: error.message 
     });
   }
 });
@@ -999,7 +1217,7 @@ router.get('/owner-service-status/:ownerId', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch service status',
-      error: error.message
+      error: error.message,
     });
   }
 });
@@ -1090,8 +1308,6 @@ router.get('/transfer-status/:paymentId', async (req, res) => {
     });
   }
 });
-
-module.exports = router;
 
 // ========================================
 // TENANT RENT PAYMENT (MONTHLY)
@@ -1343,3 +1559,5 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
     });
   }
 });
+
+module.exports = router;
