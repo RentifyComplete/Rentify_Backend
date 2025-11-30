@@ -15,6 +15,56 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+// ⭐ NEW: GET owner details endpoint
+// This endpoint is called by Flutter app to fetch owner phone number
+// Usage: GET /api/auth/owner/:ownerId
+router.get('/owner/:ownerId', async (req, res) => {
+  try {
+    console.log('🔍 Fetching owner details:', req.params.ownerId);
+
+    const owner = await User.findById(req.params.ownerId).select(
+      'name email phone phoneNumber mobileNumber mobile contact contactNumber address city'
+    );
+
+    if (!owner) {
+      console.log('⚠️ Owner not found:', req.params.ownerId);
+      return res.status(404).json({
+        success: false,
+        message: 'Owner not found'
+      });
+    }
+
+    // Return owner data with normalized phone field
+    const ownerData = {
+      _id: owner._id,
+      name: owner.name,
+      email: owner.email,
+      // Try multiple phone field names - return the first one that has a value
+      phoneNumber: owner.phone || owner.phoneNumber || owner.mobileNumber || owner.mobile || owner.contact || owner.contactNumber || null,
+      phone: owner.phone || owner.phoneNumber || owner.mobileNumber || owner.mobile || owner.contact || owner.contactNumber || null,
+      address: owner.address || null,
+      city: owner.city || null,
+    };
+
+    console.log('✅ Owner details fetched:', ownerData.name);
+    console.log('📞 Owner phone:', ownerData.phone);
+
+    res.status(200).json({
+      success: true,
+      data: ownerData
+    });
+  } catch (error) {
+    console.error('❌ Error fetching owner:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch owner',
+      error: error.message
+    });
+  }
+});
+
+// ⭐ EXISTING: All your existing endpoints below...
+
 // ------------------------
 // SEND RESET OTP
 // ------------------------
