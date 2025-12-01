@@ -15,7 +15,7 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// ⭐ NEW: GET owner details endpoint
+// ⭐ FIXED: GET owner details endpoint - Extracts phone from personalDetails
 // This endpoint is called by Flutter app to fetch owner phone number
 // Usage: GET /api/auth/owner/:ownerId
 router.get('/owner/:ownerId', async (req, res) => {
@@ -23,7 +23,7 @@ router.get('/owner/:ownerId', async (req, res) => {
     console.log('🔍 Fetching owner details:', req.params.ownerId);
 
     const owner = await User.findById(req.params.ownerId).select(
-      'name email phone phoneNumber mobileNumber mobile contact contactNumber address city'
+      'name email phone phoneNumber personalDetails address city'
     );
 
     if (!owner) {
@@ -34,20 +34,32 @@ router.get('/owner/:ownerId', async (req, res) => {
       });
     }
 
+    // ⭐ FIXED: Extract phone from nested personalDetails object
+    let phoneNumber = 
+      owner.phone ||                                    // Root level phone
+      owner.phoneNumber ||                              // Root level phoneNumber
+      owner.personalDetails?.phone ||                   // ✅ Nested in personalDetails
+      owner.personalDetails?.phoneNumber ||             // Nested phoneNumber
+      owner.personalDetails?.mobileNumber ||            // Nested mobileNumber
+      owner.personalDetails?.mobile ||                  // Nested mobile
+      owner.personalDetails?.contactNumber ||           // Nested contactNumber
+      owner.personalDetails?.contact ||                 // Nested contact
+      null;
+
     // Return owner data with normalized phone field
     const ownerData = {
       _id: owner._id,
-      name: owner.name,
+      name: owner.name || 'Property Owner',
       email: owner.email,
-      // Try multiple phone field names - return the first one that has a value
-      phoneNumber: owner.phone || owner.phoneNumber || owner.mobileNumber || owner.mobile || owner.contact || owner.contactNumber || null,
-      phone: owner.phone || owner.phoneNumber || owner.mobileNumber || owner.mobile || owner.contact || owner.contactNumber || null,
+      phoneNumber: phoneNumber,  // ✅ NOW HAS PHONE FROM personalDetails
+      phone: phoneNumber,         // ✅ Fallback field
       address: owner.address || null,
       city: owner.city || null,
     };
 
     console.log('✅ Owner details fetched:', ownerData.name);
     console.log('📞 Owner phone:', ownerData.phone);
+    console.log('📋 Complete owner data:', ownerData);
 
     res.status(200).json({
       success: true,
