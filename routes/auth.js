@@ -1,4 +1,4 @@
-// routes/auth.js
+// routes/auth.js - FULLY CORRECTED VERSION
 const express = require('express');
 const router = express.Router();
 const User = require('../models/user');
@@ -15,7 +15,7 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// ⭐ FIXED: GET owner details endpoint - Extracts phone from personalDetails
+// ⭐ FULLY FIXED: GET owner details endpoint - Extracts phone from personalDetails
 // This endpoint is called by Flutter app to fetch owner phone number
 // Usage: GET /api/auth/owner/:ownerId
 router.get('/owner/:ownerId', async (req, res) => {
@@ -34,32 +34,70 @@ router.get('/owner/:ownerId', async (req, res) => {
       });
     }
 
-    // ⭐ FIXED: Extract phone from nested personalDetails object
-    let phoneNumber = 
-      owner.phone ||                                    // Root level phone
-      owner.phoneNumber ||                              // Root level phoneNumber
-      owner.personalDetails?.phone ||                   // ✅ Nested in personalDetails
-      owner.personalDetails?.phoneNumber ||             // Nested phoneNumber
-      owner.personalDetails?.mobileNumber ||            // Nested mobileNumber
-      owner.personalDetails?.mobile ||                  // Nested mobile
-      owner.personalDetails?.contactNumber ||           // Nested contactNumber
-      owner.personalDetails?.contact ||                 // Nested contact
-      null;
+    console.log('📋 Owner found - extracting details...');
+    console.log('Owner object:', JSON.stringify(owner, null, 2));
+
+    // ⭐ FULLY FIXED: Use EXPLICIT checking for personalDetails
+    let phoneNumber = null;
+    let ownerName = null;
+
+    // Check root level phone first
+    if (owner.phone) {
+      phoneNumber = owner.phone;
+      console.log('✅ Phone found at root level:', phoneNumber);
+    } else if (owner.phoneNumber) {
+      phoneNumber = owner.phoneNumber;
+      console.log('✅ PhoneNumber found at root level:', phoneNumber);
+    }
+    // Now check personalDetails - EXPLICIT CHECK (NOT optional chaining)
+    else if (owner.personalDetails && owner.personalDetails.phone) {
+      phoneNumber = owner.personalDetails.phone;
+      console.log('✅ Phone found in personalDetails:', phoneNumber);
+    } else if (owner.personalDetails && owner.personalDetails.phoneNumber) {
+      phoneNumber = owner.personalDetails.phoneNumber;
+      console.log('✅ PhoneNumber found in personalDetails:', phoneNumber);
+    } else if (owner.personalDetails && owner.personalDetails.mobileNumber) {
+      phoneNumber = owner.personalDetails.mobileNumber;
+      console.log('✅ MobileNumber found in personalDetails:', phoneNumber);
+    } else if (owner.personalDetails && owner.personalDetails.mobile) {
+      phoneNumber = owner.personalDetails.mobile;
+      console.log('✅ Mobile found in personalDetails:', phoneNumber);
+    } else if (owner.personalDetails && owner.personalDetails.contactNumber) {
+      phoneNumber = owner.personalDetails.contactNumber;
+      console.log('✅ ContactNumber found in personalDetails:', phoneNumber);
+    } else if (owner.personalDetails && owner.personalDetails.contact) {
+      phoneNumber = owner.personalDetails.contact;
+      console.log('✅ Contact found in personalDetails:', phoneNumber);
+    } else {
+      console.log('⚠️ No phone number found in any location');
+    }
+
+    // Extract owner name
+    if (owner.name) {
+      ownerName = owner.name;
+    } else if (owner.personalDetails && owner.personalDetails.name) {
+      ownerName = owner.personalDetails.name;
+    } else {
+      ownerName = 'Property Owner';
+    }
+
+    console.log('📝 Owner name:', ownerName);
+    console.log('📞 Owner phone:', phoneNumber);
 
     // Return owner data with normalized phone field
     const ownerData = {
       _id: owner._id,
-      name: owner.name || 'Property Owner',
+      name: ownerName,  // ✅ Actual name from database
       email: owner.email,
-      phoneNumber: phoneNumber,  // ✅ NOW HAS PHONE FROM personalDetails
-      phone: phoneNumber,         // ✅ Fallback field
+      phoneNumber: phoneNumber,  // ✅ WILL HAVE PHONE NOW!
+      phone: phoneNumber,  // ✅ Fallback field
       address: owner.address || null,
       city: owner.city || null,
     };
 
     console.log('✅ Owner details fetched:', ownerData.name);
     console.log('📞 Owner phone:', ownerData.phone);
-    console.log('📋 Complete owner data:', ownerData);
+    console.log('📋 Complete owner data:', JSON.stringify(ownerData, null, 2));
 
     res.status(200).json({
       success: true,
