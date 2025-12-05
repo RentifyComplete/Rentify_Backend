@@ -5,7 +5,7 @@ const express = require('express');
 const router = express.Router();
 const Booking = require('../models/Booking');
 const Property = require('../models/Property');
-const User = require('../models/User');
+const User = require('../models/user');
 
 // ============================================================================
 // CREATE BOOKING
