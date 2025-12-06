@@ -1,4 +1,4 @@
-// routes/auth.js - FULLY CORRECTED VERSION WITH FIXED RESPONSE
+// routes/auth.js - COMPLETE VERSION WITH REGISTRATION
 const express = require('express');
 const router = express.Router();
 const User = require('../models/user');
@@ -15,15 +15,148 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// ⭐ FULLY FIXED: GET owner details endpoint - Extracts phone from personalDetails
-// This endpoint is called by Flutter app to fetch owner phone number
-// Usage: GET /api/auth/owner/:ownerId
-// ⭐ FIXED: GET owner details endpoint - Replace lines 22-120 with this
+// ⭐ NEW: REGISTRATION ENDPOINT - Saves phone to personalDetails
+router.post('/register', async (req, res) => {
+  try {
+    console.log('📝 Registration request:', { ...req.body, password: '***' });
+    
+    const { fullName, email, password, phone, dateOfBirth, userType } = req.body;
+
+    // Validation
+    if (!fullName || !email || !password || !phone) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Full name, email, password, and phone are required' 
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
+    if (existingUser) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Email already registered' 
+      });
+    }
+
+    // Hash password
+    const hashedPassword = hashPassword(password);
+
+    // ⭐ CRITICAL: Save phone to BOTH root level AND personalDetails
+    const newUser = new User({
+      name: fullName,
+      email: email.toLowerCase().trim(),
+      password: hashedPassword,
+      phone: phone.trim(), // Root level
+      userType: userType || 'owner',
+      personalDetails: {
+        fullName: fullName,
+        phone: phone.trim(), // ⭐ Inside personalDetails for easy extraction
+        dateOfBirth: dateOfBirth || null
+      }
+    });
+
+    await newUser.save();
+
+    console.log('✅ User registered successfully:', newUser.email);
+    console.log('📞 Phone saved to personalDetails:', newUser.personalDetails.phone);
+
+    res.status(201).json({ 
+      success: true, 
+      message: 'Registration successful',
+      user: {
+        id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        userType: newUser.userType,
+        phone: newUser.personalDetails.phone
+      }
+    });
+
+  } catch (err) {
+    console.error('❌ Registration error:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Registration failed. Please try again.',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+});
+
+// ⭐ NEW: LOGIN ENDPOINT
+router.post('/login', async (req, res) => {
+  try {
+    console.log('🔐 Login request:', { email: req.body.email });
+    
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Email and password are required' 
+      });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    
+    if (!user) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid email or password' 
+      });
+    }
+
+    // Check if account is locked
+    if (user.isLocked) {
+      return res.status(423).json({ 
+        success: false, 
+        message: 'Account is temporarily locked. Please try again later.' 
+      });
+    }
+
+    // Verify password
+    const hashedPassword = hashPassword(password);
+    
+    if (user.password !== hashedPassword) {
+      await user.incrementLoginAttempts();
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid email or password' 
+      });
+    }
+
+    // Reset login attempts on successful login
+    await user.resetLoginAttempts();
+
+    console.log('✅ Login successful:', user.email);
+
+    res.json({ 
+      success: true, 
+      message: 'Login successful',
+      user: {
+        id: user._id,
+        name: user.name || user.personalDetails?.fullName,
+        email: user.email,
+        userType: user.userType,
+        phone: user.personalDetails?.phone || user.phone
+      }
+    });
+
+  } catch (err) {
+    console.error('❌ Login error:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Login failed. Please try again.',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+});
+
+// ⭐ GET owner details endpoint - Extracts phone from personalDetails
 router.get('/owner/:ownerId', async (req, res) => {
   try {
     console.log('🔍 Fetching owner details:', req.params.ownerId);
 
-    // ⭐ CRITICAL FIX: Remove .select() to load full object including personalDetails
     const owner = await User.findById(req.params.ownerId);
 
     if (!owner) {
@@ -38,18 +171,18 @@ router.get('/owner/:ownerId', async (req, res) => {
     const ownerObj = owner.toObject();
     console.log(JSON.stringify(ownerObj, null, 2));
 
-    // ⭐ EXTRACT PHONE NUMBER - Check all possible locations
+    // Extract phone number from all possible locations
     let phoneNumber = null;
     let ownerName = null;
 
-    // 1. Check root level phone fields
+    // 1. Check root level
     phoneNumber = ownerObj.phone || ownerObj.phoneNumber;
     
     if (phoneNumber) {
       console.log('✅ Phone found at root level:', phoneNumber);
     }
     
-    // 2. Check personalDetails object (only if it exists)
+    // 2. Check personalDetails
     if (!phoneNumber && ownerObj.personalDetails && typeof ownerObj.personalDetails === 'object') {
       console.log('🔍 Checking personalDetails:', JSON.stringify(ownerObj.personalDetails, null, 2));
       
@@ -78,7 +211,6 @@ router.get('/owner/:ownerId', async (req, res) => {
     console.log('📝 Final owner name:', ownerName);
     console.log('📞 Final owner phone:', phoneNumber);
 
-    // Return owner data
     const ownerData = {
       _id: owner._id,
       name: ownerName,

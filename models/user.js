@@ -1,4 +1,4 @@
-// models/User.js - UPDATED with Bank Details & Razorpay Fields
+// models/User.js - UPDATED with personalDetails schema
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
@@ -33,10 +33,30 @@ const userSchema = new mongoose.Schema({
     default: 'tenant'
   },
 
-  // Phone number
+  // Phone number (root level - for backward compatibility)
   phone: {
     type: String,
     trim: true
+  },
+
+  // ⭐ NEW: Personal Details Object
+  personalDetails: {
+    fullName: {
+      type: String,
+      trim: true
+    },
+    phone: {
+      type: String,
+      trim: true
+    },
+    dateOfBirth: {
+      type: String,
+      trim: true
+    },
+    address: {
+      type: String,
+      trim: true
+    }
   },
 
   // Profile image
@@ -44,7 +64,7 @@ const userSchema = new mongoose.Schema({
     type: String
   },
 
-  // ⭐ NEW: Bank Details for Property Owners (for Razorpay Route)
+  // ⭐ Bank Details for Property Owners (for Razorpay Route)
   bankDetails: {
     accountNumber: {
       type: String,
@@ -64,7 +84,7 @@ const userSchema = new mongoose.Schema({
     }
   },
 
-  // ⭐ NEW: Razorpay Integration Fields
+  // ⭐ Razorpay Integration Fields
   razorpayContactId: {
     type: String,
     trim: true
