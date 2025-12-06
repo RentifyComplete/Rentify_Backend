@@ -18,13 +18,13 @@ function generateOTP() {
 // ⭐ FULLY FIXED: GET owner details endpoint - Extracts phone from personalDetails
 // This endpoint is called by Flutter app to fetch owner phone number
 // Usage: GET /api/auth/owner/:ownerId
+// ⭐ FIXED: GET owner details endpoint - Replace lines 22-120 with this
 router.get('/owner/:ownerId', async (req, res) => {
   try {
     console.log('🔍 Fetching owner details:', req.params.ownerId);
 
-    const owner = await User.findById(req.params.ownerId).select(
-      'name email phone phoneNumber personalDetails address city'
-    );
+    // ⭐ CRITICAL FIX: Remove .select() to load full object including personalDetails
+    const owner = await User.findById(req.params.ownerId);
 
     if (!owner) {
       console.log('⚠️ Owner not found:', req.params.ownerId);
@@ -34,43 +34,36 @@ router.get('/owner/:ownerId', async (req, res) => {
       });
     }
 
-    console.log('📋 Raw owner object from DB:', JSON.stringify(owner, null, 2));
+    console.log('📋 Raw owner object from DB:');
+    const ownerObj = owner.toObject();
+    console.log(JSON.stringify(ownerObj, null, 2));
 
     // ⭐ EXTRACT PHONE NUMBER - Check all possible locations
     let phoneNumber = null;
     let ownerName = null;
 
     // 1. Check root level phone fields
-    if (owner.phone) {
-      phoneNumber = owner.phone;
-      console.log('✅ Phone found at owner.phone:', phoneNumber);
-    } else if (owner.phoneNumber) {
-      phoneNumber = owner.phoneNumber;
-      console.log('✅ Phone found at owner.phoneNumber:', phoneNumber);
+    phoneNumber = ownerObj.phone || ownerObj.phoneNumber;
+    
+    if (phoneNumber) {
+      console.log('✅ Phone found at root level:', phoneNumber);
     }
     
-    // 2. Check personalDetails object (EXPLICIT checking)
-    if (!phoneNumber && owner.personalDetails) {
-      console.log('🔍 Checking personalDetails:', JSON.stringify(owner.personalDetails, null, 2));
+    // 2. Check personalDetails object (only if it exists)
+    if (!phoneNumber && ownerObj.personalDetails && typeof ownerObj.personalDetails === 'object') {
+      console.log('🔍 Checking personalDetails:', JSON.stringify(ownerObj.personalDetails, null, 2));
       
-      if (owner.personalDetails.phone) {
-        phoneNumber = owner.personalDetails.phone;
-        console.log('✅ Phone found in personalDetails.phone:', phoneNumber);
-      } else if (owner.personalDetails.phoneNumber) {
-        phoneNumber = owner.personalDetails.phoneNumber;
-        console.log('✅ Phone found in personalDetails.phoneNumber:', phoneNumber);
-      } else if (owner.personalDetails.mobile) {
-        phoneNumber = owner.personalDetails.mobile;
-        console.log('✅ Phone found in personalDetails.mobile:', phoneNumber);
-      } else if (owner.personalDetails.mobileNumber) {
-        phoneNumber = owner.personalDetails.mobileNumber;
-        console.log('✅ Phone found in personalDetails.mobileNumber:', phoneNumber);
-      } else if (owner.personalDetails.contactNumber) {
-        phoneNumber = owner.personalDetails.contactNumber;
-        console.log('✅ Phone found in personalDetails.contactNumber:', phoneNumber);
+      const pd = ownerObj.personalDetails;
+      phoneNumber = pd.phone || pd.phoneNumber || pd.mobile || 
+                   pd.mobileNumber || pd.contactNumber || pd.contact;
+      
+      if (phoneNumber) {
+        console.log('✅ Phone found in personalDetails:', phoneNumber);
       } else {
-        console.log('⚠️ No phone found in personalDetails');
+        console.log('⚠️ personalDetails exists but no phone found');
       }
+    } else if (!ownerObj.personalDetails) {
+      console.log('⚠️ No personalDetails object exists for this user');
     }
 
     if (!phoneNumber) {
@@ -78,36 +71,29 @@ router.get('/owner/:ownerId', async (req, res) => {
     }
 
     // 3. Extract owner name
-    if (owner.name) {
-      ownerName = owner.name;
-    } else if (owner.personalDetails && owner.personalDetails.fullName) {
-      ownerName = owner.personalDetails.fullName;
-    } else if (owner.personalDetails && owner.personalDetails.name) {
-      ownerName = owner.personalDetails.name;
-    } else {
-      ownerName = 'Property Owner';
-    }
+    ownerName = ownerObj.name || 
+                (ownerObj.personalDetails && (ownerObj.personalDetails.fullName || ownerObj.personalDetails.name)) || 
+                'Property Owner';
 
     console.log('📝 Final owner name:', ownerName);
     console.log('📞 Final owner phone:', phoneNumber);
 
-    // ⭐ FIXED: Return as "owner" not "data" to match Flutter expectations
+    // Return owner data
     const ownerData = {
       _id: owner._id,
       name: ownerName,
       email: owner.email,
-      phoneNumber: phoneNumber,  // Primary field
-      phone: phoneNumber,        // Fallback field
+      phoneNumber: phoneNumber,
+      phone: phoneNumber,
       address: owner.address || null,
       city: owner.city || null,
     };
 
     console.log('✅ Sending owner data:', JSON.stringify(ownerData, null, 2));
 
-    // ⭐ CRITICAL FIX: Return as "owner" to match Flutter code
     res.status(200).json({
       success: true,
-      owner: ownerData  // Changed from "data" to "owner"
+      owner: ownerData
     });
   } catch (error) {
     console.error('❌ Error fetching owner:', error);
