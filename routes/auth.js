@@ -1,9 +1,9 @@
-// routes/auth.js - FULLY CORRECTED VERSION
+// routes/auth.js - FULLY CORRECTED VERSION WITH FIXED RESPONSE
 const express = require('express');
 const router = express.Router();
 const User = require('../models/user');
 const sendEmail = require('../utils/sendEmail');
-const crypto = require('crypto'); // Use built-in crypto for SHA256
+const crypto = require('crypto');
 
 // Helper function to hash password with SHA256 (matches Flutter)
 function hashPassword(password) {
@@ -34,74 +34,80 @@ router.get('/owner/:ownerId', async (req, res) => {
       });
     }
 
-    console.log('📋 Owner found - extracting details...');
-    console.log('Owner object:', JSON.stringify(owner, null, 2));
+    console.log('📋 Raw owner object from DB:', JSON.stringify(owner, null, 2));
 
-    // ⭐ FULLY FIXED: Use EXPLICIT checking for personalDetails
+    // ⭐ EXTRACT PHONE NUMBER - Check all possible locations
     let phoneNumber = null;
     let ownerName = null;
 
-    // Check root level phone first
+    // 1. Check root level phone fields
     if (owner.phone) {
       phoneNumber = owner.phone;
-      console.log('✅ Phone found at root level:', phoneNumber);
+      console.log('✅ Phone found at owner.phone:', phoneNumber);
     } else if (owner.phoneNumber) {
       phoneNumber = owner.phoneNumber;
-      console.log('✅ PhoneNumber found at root level:', phoneNumber);
+      console.log('✅ Phone found at owner.phoneNumber:', phoneNumber);
     }
-    // Now check personalDetails - EXPLICIT CHECK (NOT optional chaining)
-    else if (owner.personalDetails && owner.personalDetails.phone) {
-      phoneNumber = owner.personalDetails.phone;
-      console.log('✅ Phone found in personalDetails:', phoneNumber);
-    } else if (owner.personalDetails && owner.personalDetails.phoneNumber) {
-      phoneNumber = owner.personalDetails.phoneNumber;
-      console.log('✅ PhoneNumber found in personalDetails:', phoneNumber);
-    } else if (owner.personalDetails && owner.personalDetails.mobileNumber) {
-      phoneNumber = owner.personalDetails.mobileNumber;
-      console.log('✅ MobileNumber found in personalDetails:', phoneNumber);
-    } else if (owner.personalDetails && owner.personalDetails.mobile) {
-      phoneNumber = owner.personalDetails.mobile;
-      console.log('✅ Mobile found in personalDetails:', phoneNumber);
-    } else if (owner.personalDetails && owner.personalDetails.contactNumber) {
-      phoneNumber = owner.personalDetails.contactNumber;
-      console.log('✅ ContactNumber found in personalDetails:', phoneNumber);
-    } else if (owner.personalDetails && owner.personalDetails.contact) {
-      phoneNumber = owner.personalDetails.contact;
-      console.log('✅ Contact found in personalDetails:', phoneNumber);
-    } else {
-      console.log('⚠️ No phone number found in any location');
+    
+    // 2. Check personalDetails object (EXPLICIT checking)
+    if (!phoneNumber && owner.personalDetails) {
+      console.log('🔍 Checking personalDetails:', JSON.stringify(owner.personalDetails, null, 2));
+      
+      if (owner.personalDetails.phone) {
+        phoneNumber = owner.personalDetails.phone;
+        console.log('✅ Phone found in personalDetails.phone:', phoneNumber);
+      } else if (owner.personalDetails.phoneNumber) {
+        phoneNumber = owner.personalDetails.phoneNumber;
+        console.log('✅ Phone found in personalDetails.phoneNumber:', phoneNumber);
+      } else if (owner.personalDetails.mobile) {
+        phoneNumber = owner.personalDetails.mobile;
+        console.log('✅ Phone found in personalDetails.mobile:', phoneNumber);
+      } else if (owner.personalDetails.mobileNumber) {
+        phoneNumber = owner.personalDetails.mobileNumber;
+        console.log('✅ Phone found in personalDetails.mobileNumber:', phoneNumber);
+      } else if (owner.personalDetails.contactNumber) {
+        phoneNumber = owner.personalDetails.contactNumber;
+        console.log('✅ Phone found in personalDetails.contactNumber:', phoneNumber);
+      } else {
+        console.log('⚠️ No phone found in personalDetails');
+      }
     }
 
-    // Extract owner name
+    if (!phoneNumber) {
+      console.log('❌ NO PHONE NUMBER FOUND ANYWHERE!');
+    }
+
+    // 3. Extract owner name
     if (owner.name) {
       ownerName = owner.name;
+    } else if (owner.personalDetails && owner.personalDetails.fullName) {
+      ownerName = owner.personalDetails.fullName;
     } else if (owner.personalDetails && owner.personalDetails.name) {
       ownerName = owner.personalDetails.name;
     } else {
       ownerName = 'Property Owner';
     }
 
-    console.log('📝 Owner name:', ownerName);
-    console.log('📞 Owner phone:', phoneNumber);
+    console.log('📝 Final owner name:', ownerName);
+    console.log('📞 Final owner phone:', phoneNumber);
 
-    // Return owner data with normalized phone field
+    // ⭐ FIXED: Return as "owner" not "data" to match Flutter expectations
     const ownerData = {
       _id: owner._id,
-      name: ownerName,  // ✅ Actual name from database
+      name: ownerName,
       email: owner.email,
-      phoneNumber: phoneNumber,  // ✅ WILL HAVE PHONE NOW!
-      phone: phoneNumber,  // ✅ Fallback field
+      phoneNumber: phoneNumber,  // Primary field
+      phone: phoneNumber,        // Fallback field
       address: owner.address || null,
       city: owner.city || null,
     };
 
-    console.log('✅ Owner details fetched:', ownerData.name);
-    console.log('📞 Owner phone:', ownerData.phone);
-    console.log('📋 Complete owner data:', JSON.stringify(ownerData, null, 2));
+    console.log('✅ Sending owner data:', JSON.stringify(ownerData, null, 2));
 
+    // ⭐ CRITICAL FIX: Return as "owner" to match Flutter code
     res.status(200).json({
       success: true,
-      data: ownerData
+      owner: ownerData  // Changed from "data" to "owner"
     });
   } catch (error) {
     console.error('❌ Error fetching owner:', error);
@@ -113,8 +119,6 @@ router.get('/owner/:ownerId', async (req, res) => {
   }
 });
 
-// ⭐ EXISTING: All your existing endpoints below...
-
 // ------------------------
 // SEND RESET OTP
 // ------------------------
@@ -124,7 +128,6 @@ router.post('/send-reset-otp', async (req, res) => {
     
     const { email } = req.body;
     
-    // Validation
     if (!email) {
       return res.status(400).json({ 
         success: false, 
@@ -132,7 +135,6 @@ router.post('/send-reset-otp', async (req, res) => {
       });
     }
 
-    // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({ 
@@ -141,7 +143,6 @@ router.post('/send-reset-otp', async (req, res) => {
       });
     }
 
-    // Check if user exists
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) {
       return res.status(404).json({ 
@@ -150,7 +151,6 @@ router.post('/send-reset-otp', async (req, res) => {
       });
     }
 
-    // Generate OTP and set expiry (5 minutes)
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
@@ -160,7 +160,6 @@ router.post('/send-reset-otp', async (req, res) => {
 
     console.log(`✅ OTP generated for ${email}: ${otp} (expires: ${expiresAt.toISOString()})`);
 
-    // Send email
     const subject = 'Rentify — Password Reset OTP';
     const html = `
       <!DOCTYPE html>
@@ -228,7 +227,6 @@ router.post('/verify-otp', async (req, res) => {
     
     const { email, otp } = req.body;
 
-    // Validation
     if (!email || !otp) {
       return res.status(400).json({ 
         success: false, 
@@ -236,7 +234,6 @@ router.post('/verify-otp', async (req, res) => {
       });
     }
 
-    // Find user
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) {
       return res.status(404).json({ 
@@ -245,7 +242,6 @@ router.post('/verify-otp', async (req, res) => {
       });
     }
 
-    // Check if OTP exists
     if (!user.otp || !user.otpExpires) {
       return res.status(400).json({ 
         success: false, 
@@ -253,7 +249,6 @@ router.post('/verify-otp', async (req, res) => {
       });
     }
 
-    // Check if OTP expired
     if (new Date() > new Date(user.otpExpires)) {
       user.otp = null;
       user.otpExpires = null;
@@ -265,7 +260,6 @@ router.post('/verify-otp', async (req, res) => {
       });
     }
 
-    // Verify OTP
     if (user.otp !== otp.trim()) {
       return res.status(400).json({ 
         success: false, 
@@ -274,9 +268,6 @@ router.post('/verify-otp', async (req, res) => {
     }
 
     console.log(`✅ OTP verified for ${email}`);
-
-    // Note: We DON'T clear the OTP here anymore
-    // It will be cleared in reset-password after successful password change
     
     return res.json({ 
       success: true, 
@@ -302,7 +293,6 @@ router.post('/reset-password', async (req, res) => {
     
     const { email, otp, newPassword } = req.body;
 
-    // Validation
     if (!email || !otp || !newPassword) {
       return res.status(400).json({ 
         success: false, 
@@ -310,7 +300,6 @@ router.post('/reset-password', async (req, res) => {
       });
     }
 
-    // Password strength validation
     if (newPassword.trim().length < 6) {
       return res.status(400).json({ 
         success: false, 
@@ -318,7 +307,6 @@ router.post('/reset-password', async (req, res) => {
       });
     }
 
-    // Find user
     const user = await User.findOne({ email: email.toLowerCase().trim() });
     if (!user) {
       return res.status(404).json({ 
@@ -327,7 +315,6 @@ router.post('/reset-password', async (req, res) => {
       });
     }
 
-    // Check if OTP exists
     if (!user.otp || !user.otpExpires) {
       return res.status(400).json({ 
         success: false, 
@@ -335,7 +322,6 @@ router.post('/reset-password', async (req, res) => {
       });
     }
 
-    // Verify OTP
     if (user.otp !== otp.trim()) {
       return res.status(400).json({ 
         success: false, 
@@ -343,7 +329,6 @@ router.post('/reset-password', async (req, res) => {
       });
     }
 
-    // Check if OTP expired
     if (new Date() > new Date(user.otpExpires)) {
       user.otp = null;
       user.otpExpires = null;
@@ -355,12 +340,10 @@ router.post('/reset-password', async (req, res) => {
       });
     }
 
-    // Hash new password with SHA256 (matches Flutter)
     const hashedPassword = hashPassword(newPassword.trim());
     
     console.log(`📝 New password hash: ${hashedPassword.substring(0, 10)}...`);
     
-    // Update password and clear OTP
     user.password = hashedPassword;
     user.otp = null;
     user.otpExpires = null;
