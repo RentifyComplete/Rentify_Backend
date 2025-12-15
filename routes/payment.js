@@ -1559,5 +1559,86 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
     });
   }
 });
-
+// ========================================
+// GET TENANT PAYMENT HISTORY
+// Returns all rent payments made by a tenant
+// ========================================
+router.get('/tenant/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    
+    console.log('📜 ==================== TENANT PAYMENT HISTORY ====================');
+    console.log('Tenant Email:', email);
+    
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email parameter is required'
+      });
+    }
+    
+    // Find all bookings for this tenant
+    const bookings = await Booking.find({ 
+      tenantEmail: email 
+    }).populate('propertyId', 'title address');
+    
+    console.log('📋 Found', bookings.length, 'bookings for tenant');
+    
+    if (bookings.length === 0) {
+      return res.json({
+        success: true,
+        payments: [],
+        message: 'No bookings found for this tenant'
+      });
+    }
+    
+    // Extract all payments from all bookings
+    const allPayments = [];
+    
+    for (const booking of bookings) {
+      if (booking.rentPaymentHistory && booking.rentPaymentHistory.length > 0) {
+        booking.rentPaymentHistory.forEach(payment => {
+          allPayments.push({
+            _id: payment._id || payment.paymentId,
+            bookingId: booking._id,
+            propertyId: booking.propertyId?._id || booking.propertyId,
+            propertyTitle: booking.propertyTitle || booking.propertyId?.title || 'Property',
+            propertyAddress: booking.propertyAddress || booking.propertyId?.address || 'Address not available',
+            amount: payment.amount,
+            monthsPaid: payment.monthsPaid || 1,
+            convenienceFee: payment.convenienceFee || 0,
+            date: payment.paidAt || payment.createdAt || booking.createdAt,
+            status: 'paid',
+            method: 'Razorpay',
+            transactionId: payment.paymentId,
+            razorpayOrderId: payment.orderId,
+            paidOn: payment.paidAt || payment.createdAt,
+            month: new Date(payment.paidAt || payment.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+          });
+        });
+      }
+    }
+    
+    // Sort by date (newest first)
+    allPayments.sort((a, b) => new Date(b.date) - new Date(a.date));
+    
+    console.log('✅ Found', allPayments.length, 'total payments');
+    console.log('📜 ==================== HISTORY SUCCESS ====================\n');
+    
+    res.json({
+      success: true,
+      payments: allPayments,
+      totalPayments: allPayments.length,
+      totalAmount: allPayments.reduce((sum, p) => sum + p.amount, 0)
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching tenant payment history:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch payment history',
+      error: error.message
+    });
+  }
+});
 module.exports = router;
