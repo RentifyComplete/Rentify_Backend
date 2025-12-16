@@ -1,5 +1,6 @@
 // routes/booking.js
 // Complete booking routes with CASCADE DELETE endpoint + /create endpoint
+// ⭐ FIXED: /create endpoint now includes orderId, paymentId, leaseDuration, totalAmount
 
 const express = require('express');
 const router = express.Router();
@@ -21,7 +22,12 @@ router.post('/', async (req, res) => {
       moveInDate,
       rentAmount,
       securityDeposit,
-      status = 'pending'
+      convenienceFee,
+      totalAmount,
+      leaseDuration,
+      orderId,
+      paymentId,
+      status = 'active'
     } = req.body;
 
     console.log('📋 Creating new booking...');
@@ -30,10 +36,10 @@ router.post('/', async (req, res) => {
     console.log('Tenant Email:', tenantEmail);
 
     // Validate required fields
-    if (!propertyId || !tenantId || !tenantEmail) {
+    if (!propertyId || !tenantEmail) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields: propertyId, tenantId, tenantEmail'
+        message: 'Missing required fields: propertyId, tenantEmail'
       });
     }
 
@@ -49,7 +55,7 @@ router.post('/', async (req, res) => {
     // Check if tenant already has a booking for this property
     const existingBooking = await Booking.findOne({
       propertyId,
-      tenantId,
+      tenantEmail,
       status: { $in: ['pending', 'active'] }
     });
 
@@ -60,17 +66,29 @@ router.post('/', async (req, res) => {
       });
     }
 
+    // Calculate rent due date
+    const moveInDateObj = moveInDate ? new Date(moveInDate) : new Date();
+    const rentDueDate = new Date(moveInDateObj);
+    rentDueDate.setMonth(rentDueDate.getMonth() + (parseInt(leaseDuration) || 1));
+
     // Create new booking
     const newBooking = new Booking({
       propertyId,
-      tenantId,
-      tenantName,
+      tenantId: tenantId || tenantEmail,
+      tenantName: tenantName || 'Tenant',
       tenantEmail,
-      tenantPhone,
-      moveInDate,
-      monthlyRent: rentAmount || property.price,
-      securityDeposit,
+      tenantPhone: tenantPhone || '',
+      monthlyRent: parseInt(rentAmount) || property.price,
+      securityDeposit: parseInt(securityDeposit) || 0,
+      convenienceFee: parseInt(convenienceFee) || 0,
+      totalAmount: parseInt(totalAmount) || (parseInt(rentAmount) + parseInt(securityDeposit)),
+      moveInDate: moveInDateObj,
+      leaseDuration: parseInt(leaseDuration) || 1,
+      orderId: orderId || 'pending',
+      paymentId: paymentId || 'pending',
       status,
+      rentDueDate,
+      lastRentPayment: new Date(),
       propertyTitle: property.title,
       propertyAddress: property.address || property.location,
       propertyLocation: property.location,
@@ -101,6 +119,7 @@ router.post('/', async (req, res) => {
 // ============================================================================
 // ⭐ CREATE BOOKING (Alternative endpoint - POST /create)
 // For apps that call /api/bookings/create
+// ⭐ FIXED: Now includes ALL required fields
 // ============================================================================
 router.post('/create', async (req, res) => {
   try {
@@ -114,18 +133,47 @@ router.post('/create', async (req, res) => {
       monthlyRent,
       rentAmount,
       securityDeposit,
-      status = 'pending'
+      convenienceFee,
+      totalAmount,
+      leaseDuration,
+      orderId,
+      paymentId,
+      status = 'active',
+      notes
     } = req.body;
 
-    console.log('📋 Creating new booking (via /create endpoint)...');
+    console.log('📋 ==================== CREATE BOOKING ====================');
     console.log('Property ID:', propertyId);
     console.log('Tenant Email:', tenantEmail);
+    console.log('Monthly Rent:', monthlyRent || rentAmount);
+    console.log('Security Deposit:', securityDeposit);
+    console.log('Convenience Fee:', convenienceFee);
+    console.log('Total Amount:', totalAmount);
+    console.log('Lease Duration:', leaseDuration);
+    console.log('Payment ID:', paymentId);
+    console.log('Order ID:', orderId);
 
     // Validate required fields
     if (!propertyId || !tenantEmail) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields: propertyId, tenantEmail'
+      });
+    }
+
+    // Validate payment fields
+    if (!orderId || !paymentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing payment information: orderId, paymentId'
+      });
+    }
+
+    // Validate booking fields
+    if (!leaseDuration || !totalAmount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing booking details: leaseDuration, totalAmount'
       });
     }
 
@@ -138,6 +186,8 @@ router.post('/create', async (req, res) => {
       });
     }
 
+    console.log('✅ Property found:', property.title);
+
     // Check if tenant already has an active booking for this property
     const existingBooking = await Booking.findOne({
       propertyId,
@@ -146,6 +196,7 @@ router.post('/create', async (req, res) => {
     });
 
     if (existingBooking) {
+      console.log('⚠️ Existing booking found:', existingBooking._id);
       return res.status(400).json({
         success: false,
         message: 'You already have an active booking for this property'
@@ -155,17 +206,33 @@ router.post('/create', async (req, res) => {
     // Use rentAmount or monthlyRent, fallback to property price
     const finalRentAmount = rentAmount || monthlyRent || property.price;
 
-    // Create new booking
+    // Calculate rent due date (move-in date + lease duration)
+    const moveInDateObj = moveInDate ? new Date(moveInDate) : new Date();
+    const rentDueDate = new Date(moveInDateObj);
+    rentDueDate.setMonth(rentDueDate.getMonth() + parseInt(leaseDuration));
+
+    console.log('📅 Move-in Date:', moveInDateObj);
+    console.log('📅 Initial Rent Due Date:', rentDueDate);
+
+    // Create new booking with ALL required fields
     const newBooking = new Booking({
       propertyId,
-      tenantId,
-      tenantName,
+      tenantId: tenantId || tenantEmail, // Use email as fallback
+      tenantName: tenantName || 'Tenant',
       tenantEmail,
-      tenantPhone,
-      moveInDate,
-      monthlyRent: finalRentAmount,
-      securityDeposit: securityDeposit || 0,
+      tenantPhone: tenantPhone || '',
+      monthlyRent: parseInt(finalRentAmount),
+      securityDeposit: parseInt(securityDeposit) || 0,
+      convenienceFee: parseInt(convenienceFee) || 0,
+      totalAmount: parseInt(totalAmount),
+      moveInDate: moveInDateObj,
+      leaseDuration: parseInt(leaseDuration),
+      orderId,
+      paymentId,
       status,
+      notes: notes || '',
+      rentDueDate,
+      lastRentPayment: new Date(), // Initial payment
       propertyTitle: property.title,
       propertyAddress: property.address || property.location,
       propertyLocation: property.location,
@@ -176,6 +243,7 @@ router.post('/create', async (req, res) => {
     await newBooking.save();
 
     console.log('✅ Booking created successfully:', newBooking._id);
+    console.log('📋 ==================== BOOKING SUCCESS ====================\n');
 
     res.status(201).json({
       success: true,
@@ -185,6 +253,7 @@ router.post('/create', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error creating booking:', error);
+    console.error('Stack trace:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Failed to create booking',
