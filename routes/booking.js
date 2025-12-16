@@ -1,5 +1,5 @@
 // routes/booking.js
-// Complete booking routes with CASCADE DELETE endpoint
+// Complete booking routes with CASCADE DELETE endpoint + /create endpoint
 
 const express = require('express');
 const router = express.Router();
@@ -8,7 +8,7 @@ const Property = require('../models/Property');
 const User = require('../models/user');
 
 // ============================================================================
-// CREATE BOOKING
+// CREATE BOOKING (Primary endpoint - POST /)
 // ============================================================================
 router.post('/', async (req, res) => {
   try {
@@ -68,10 +68,11 @@ router.post('/', async (req, res) => {
       tenantEmail,
       tenantPhone,
       moveInDate,
-      rentAmount,
+      monthlyRent: rentAmount || property.price,
       securityDeposit,
       status,
       propertyTitle: property.title,
+      propertyAddress: property.address || property.location,
       propertyLocation: property.location,
       propertyType: property.type,
       ownerId: property.ownerId
@@ -98,15 +99,116 @@ router.post('/', async (req, res) => {
 });
 
 // ============================================================================
-// GET ALL BOOKINGS FOR A TENANT
+// ⭐ CREATE BOOKING (Alternative endpoint - POST /create)
+// For apps that call /api/bookings/create
 // ============================================================================
-router.get('/tenant/:tenantId', async (req, res) => {
+router.post('/create', async (req, res) => {
   try {
-    const { tenantId } = req.params;
+    const {
+      propertyId,
+      tenantId,
+      tenantName,
+      tenantEmail,
+      tenantPhone,
+      moveInDate,
+      monthlyRent,
+      rentAmount,
+      securityDeposit,
+      status = 'pending'
+    } = req.body;
 
-    console.log('📋 Fetching bookings for tenant:', tenantId);
+    console.log('📋 Creating new booking (via /create endpoint)...');
+    console.log('Property ID:', propertyId);
+    console.log('Tenant Email:', tenantEmail);
 
-    const bookings = await Booking.find({ tenantId }).sort({ createdAt: -1 });
+    // Validate required fields
+    if (!propertyId || !tenantEmail) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: propertyId, tenantEmail'
+      });
+    }
+
+    // Check if property exists
+    const property = await Property.findById(propertyId);
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+
+    // Check if tenant already has an active booking for this property
+    const existingBooking = await Booking.findOne({
+      propertyId,
+      tenantEmail,
+      status: { $in: ['pending', 'active'] }
+    });
+
+    if (existingBooking) {
+      return res.status(400).json({
+        success: false,
+        message: 'You already have an active booking for this property'
+      });
+    }
+
+    // Use rentAmount or monthlyRent, fallback to property price
+    const finalRentAmount = rentAmount || monthlyRent || property.price;
+
+    // Create new booking
+    const newBooking = new Booking({
+      propertyId,
+      tenantId,
+      tenantName,
+      tenantEmail,
+      tenantPhone,
+      moveInDate,
+      monthlyRent: finalRentAmount,
+      securityDeposit: securityDeposit || 0,
+      status,
+      propertyTitle: property.title,
+      propertyAddress: property.address || property.location,
+      propertyLocation: property.location,
+      propertyType: property.type,
+      ownerId: property.ownerId
+    });
+
+    await newBooking.save();
+
+    console.log('✅ Booking created successfully:', newBooking._id);
+
+    res.status(201).json({
+      success: true,
+      message: 'Booking created successfully',
+      booking: newBooking
+    });
+
+  } catch (error) {
+    console.error('❌ Error creating booking:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create booking',
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// GET ALL BOOKINGS FOR A TENANT (by email)
+// ============================================================================
+router.get('/tenant/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    console.log('📋 Fetching bookings for tenant email:', email);
+
+    // Try both tenantId and tenantEmail fields
+    const bookings = await Booking.find({
+      $or: [
+        { tenantId: email },
+        { tenantEmail: email }
+      ]
+    }).sort({ createdAt: -1 });
 
     console.log(`✅ Found ${bookings.length} bookings for tenant`);
 
