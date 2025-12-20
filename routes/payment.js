@@ -220,6 +220,73 @@ router.get('/debug/all-bookings', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// ========================================
+// CREATE INITIAL BOOKING ORDER (for first-time booking)
+// ========================================
+router.post('/create-booking-order', async (req, res) => {
+  try {
+    const { 
+      propertyId, 
+      ownerId, 
+      monthlyRent, 
+      securityDeposit,
+      propertyTitle,
+      tenantEmail 
+    } = req.body;
+    
+    console.log('💰 ==================== BOOKING ORDER ====================');
+    console.log('Property ID:', propertyId);
+    console.log('Monthly Rent:', monthlyRent);
+    console.log('Security Deposit:', securityDeposit);
+    
+    const baseAmount = monthlyRent + securityDeposit;
+    const convenienceFee = Math.round((baseAmount * 2.7) / 100);
+    const finalAmount = baseAmount + convenienceFee;
+    
+    console.log('💵 Calculation:');
+    console.log('   Base Amount: ₹' + baseAmount);
+    console.log('   Convenience Fee (2.7%): +₹' + convenienceFee);
+    console.log('   Final Amount: ₹' + finalAmount);
+    
+    const amountInPaise = Math.round(finalAmount * 100);
+    
+    const order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: 'INR',
+      receipt: `booking_${Date.now()}`.substring(0, 40),
+      notes: {
+        type: 'initial_booking',
+        propertyId: propertyId,
+        ownerId: ownerId,
+        tenantEmail: tenantEmail,
+        monthlyRent: monthlyRent,
+        securityDeposit: securityDeposit,
+        convenienceFee: convenienceFee,
+        finalAmount: finalAmount,
+      },
+    });
+    
+    console.log('✅ Booking order created:', order.id);
+    console.log('💰 ==================== ORDER SUCCESS ====================\n');
+    
+    res.status(200).json({
+      success: true,
+      orderId: order.id,
+      amount: finalAmount,
+      key: process.env.RAZORPAY_KEY_ID,
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creating booking order:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create order',
+      error: error.message,
+    });
+  }
+});
+
 // ========================================
 // CREATE TENANT RENT ORDER
 // ========================================
