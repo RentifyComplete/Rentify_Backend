@@ -194,7 +194,32 @@ router.get('/tenant/:email', async (req, res) => {
     });
   }
 });
-
+router.get('/debug/all-bookings', async (req, res) => {
+  try {
+    const allBookings = await Booking.find({}).limit(10);
+    
+    const bookingSummary = allBookings.map(booking => ({
+      _id: booking._id,
+      tenantEmail: booking.tenantEmail,
+      tenantName: booking.tenantName,
+      propertyTitle: booking.propertyTitle,
+      status: booking.status,
+      monthlyRent: booking.monthlyRent,
+      rentDueDate: booking.rentDueDate,
+      totalPaymentsInHistory: booking.rentPaymentHistory?.length || 0,
+      paymentHistory: booking.rentPaymentHistory || []
+    }));
+    
+    res.json({
+      success: true,
+      totalBookings: allBookings.length,
+      bookings: bookingSummary
+    });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 // ========================================
 // CREATE TENANT RENT ORDER
 // ========================================
