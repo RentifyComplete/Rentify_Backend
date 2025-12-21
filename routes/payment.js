@@ -750,6 +750,180 @@ router.post('/verify-service-charge-payment', async (req, res) => {
 });
 
 // ========================================
+// CAPACITY INCREASE ROUTES (PG BEDS)
+// ========================================
+
+// CREATE CAPACITY INCREASE ORDER
+router.post('/create-capacity-increase-order', async (req, res) => {
+  try {
+    const { propertyId, ownerId, additionalCharge, newMonthlyCharge, couponCode } = req.body;
+    
+    console.log('💰 ==================== CAPACITY INCREASE ORDER ====================');
+    console.log('Property ID:', propertyId);
+    console.log('Owner ID:', ownerId);
+    console.log('Additional Charge:', additionalCharge);
+    console.log('New Monthly Charge:', newMonthlyCharge);
+    console.log('Coupon Code:', couponCode || 'None');
+    
+    if (!propertyId || !ownerId || !additionalCharge) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: propertyId, ownerId, additionalCharge'
+      });
+    }
+    
+    // Apply coupon if provided
+    const couponResult = validateAndApplyCoupon(additionalCharge, couponCode);
+    
+    if (!couponResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: couponResult.error,
+      });
+    }
+
+    let finalAmount = couponResult.finalAmount;
+    
+    if (couponResult.couponCode) {
+      console.log('🎟️ Coupon Applied:', couponResult.couponCode);
+      console.log('💰 Final Amount: ₹' + finalAmount);
+    }
+    
+    const amountInPaise = Math.round(finalAmount * 100);
+    
+    const order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: 'INR',
+      receipt: `capacity_${Date.now()}`.substring(0, 40),
+      notes: {
+        type: 'capacity_increase',
+        propertyId: propertyId,
+        ownerId: ownerId,
+        additionalCharge: additionalCharge,
+        newMonthlyCharge: newMonthlyCharge,
+        couponCode: couponResult.couponCode || 'none',
+        couponDiscount: couponResult.discount || 0,
+        finalAmount: finalAmount,
+      },
+    });
+    
+    console.log('✅ Order created:', order.id);
+    console.log('💰 ==================== ORDER SUCCESS ====================\n');
+    
+    res.status(200).json({
+      success: true,
+      orderId: order.id,
+      amount: finalAmount,
+      additionalCharge: additionalCharge,
+      couponDiscount: couponResult.discount || 0,
+      couponPercent: couponResult.discountPercent || 0,
+      couponCode: couponResult.couponCode,
+      currency: 'INR',
+      key: process.env.RAZORPAY_KEY_ID,
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creating capacity increase order:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create order',
+      error: error.message,
+    });
+  }
+});
+
+// VERIFY CAPACITY INCREASE PAYMENT
+router.post('/verify-capacity-increase-payment', async (req, res) => {
+  try {
+    const { 
+      razorpay_order_id, 
+      razorpay_payment_id, 
+      razorpay_signature,
+      propertyId,
+      additionalCharge,
+      newMonthlyCharge
+    } = req.body;
+    
+    console.log('🔍 ==================== VERIFY CAPACITY INCREASE ====================');
+    console.log('Order ID:', razorpay_order_id);
+    console.log('Payment ID:', razorpay_payment_id);
+    console.log('Property ID:', propertyId);
+    console.log('Additional Charge:', additionalCharge);
+    console.log('New Monthly Charge:', newMonthlyCharge);
+    
+    // Verify signature
+    const sign = razorpay_order_id + '|' + razorpay_payment_id;
+    const expectedSign = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(sign.toString())
+      .digest('hex');
+    
+    if (razorpay_signature !== expectedSign) {
+      console.error('❌ Invalid payment signature');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid signature' 
+      });
+    }
+    
+    console.log('✅ Payment signature verified');
+    
+    // Fetch payment details from Razorpay
+    const payment = await razorpay.payments.fetch(razorpay_payment_id);
+    console.log('💳 Payment details:', {
+      amount: payment.amount,
+      status: payment.status,
+      method: payment.method
+    });
+    
+    if (payment.status !== 'captured' && payment.status !== 'authorized') {
+      console.error('❌ Payment not successful. Status:', payment.status);
+      return res.status(400).json({
+        success: false,
+        message: 'Payment not completed. Status: ' + payment.status
+      });
+    }
+    
+    // Update property with new monthly charge
+    const property = await Property.findById(propertyId);
+    
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+    
+    console.log('📋 Property found:', property.title);
+    console.log('📊 Old monthly charge:', property.monthlyServiceCharge);
+    console.log('📊 New monthly charge:', newMonthlyCharge);
+    
+    // Update the monthly service charge
+    property.monthlyServiceCharge = newMonthlyCharge;
+    await property.save();
+    
+    console.log('✅ Property monthly charge updated');
+    console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
+    
+    res.json({ 
+      success: true, 
+      paymentId: razorpay_payment_id,
+      verified: true,
+      newMonthlyCharge: newMonthlyCharge,
+      message: 'Capacity increase payment verified and property updated'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error verifying capacity increase payment:', error);
+    console.error('Stack:', error.stack);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ========================================
 // BOOKING ROUTES
 // ========================================
 
