@@ -1,5 +1,5 @@
 // routes/payment.js
-// ⭐ COMPLETE FIXED VERSION - Transaction History Working
+// ⭐ COMPLETE FIXED VERSION - All Payment Types Working
 const express = require('express');
 const router = express.Router();
 const Razorpay = require('razorpay');
@@ -72,9 +72,10 @@ const TENANT_RENT_PRICING = {
 };
 
 // ========================================
-// ⭐ FIXED: GET TENANT PAYMENT HISTORY
-// Returns all rent payments with proper property details
+// TENANT PAYMENT ROUTES
 // ========================================
+
+// ⭐ GET TENANT PAYMENT HISTORY
 router.get('/tenant/:email', async (req, res) => {
   try {
     const { email } = req.params;
@@ -89,7 +90,6 @@ router.get('/tenant/:email', async (req, res) => {
       });
     }
     
-    // ⭐ Find all bookings for this tenant
     const bookings = await Booking.find({ 
       tenantEmail: email.trim().toLowerCase()
     }).sort({ createdAt: -1 });
@@ -107,7 +107,6 @@ router.get('/tenant/:email', async (req, res) => {
       });
     }
     
-    // ⭐ Extract all payments from all bookings
     const allPayments = [];
     let totalAmount = 0;
     
@@ -116,7 +115,6 @@ router.get('/tenant/:email', async (req, res) => {
       console.log(`   - Property: ${booking.propertyTitle || booking.propertyId}`);
       console.log(`   - Payments in history: ${booking.rentPaymentHistory?.length || 0}`);
       
-      // ⭐ Get property details if not stored in booking
       let propertyTitle = booking.propertyTitle || 'Property';
       let propertyAddress = booking.propertyAddress || '';
       
@@ -170,7 +168,6 @@ router.get('/tenant/:email', async (req, res) => {
       }
     }
     
-    // ⭐ Sort by date (newest first)
     allPayments.sort((a, b) => new Date(b.date) - new Date(a.date));
     
     console.log('✅ Total payments found:', allPayments.length);
@@ -194,102 +191,8 @@ router.get('/tenant/:email', async (req, res) => {
     });
   }
 });
-router.get('/debug/all-bookings', async (req, res) => {
-  try {
-    const allBookings = await Booking.find({}).limit(10);
-    
-    const bookingSummary = allBookings.map(booking => ({
-      _id: booking._id,
-      tenantEmail: booking.tenantEmail,
-      tenantName: booking.tenantName,
-      propertyTitle: booking.propertyTitle,
-      status: booking.status,
-      monthlyRent: booking.monthlyRent,
-      rentDueDate: booking.rentDueDate,
-      totalPaymentsInHistory: booking.rentPaymentHistory?.length || 0,
-      paymentHistory: booking.rentPaymentHistory || []
-    }));
-    
-    res.json({
-      success: true,
-      totalBookings: allBookings.length,
-      bookings: bookingSummary
-    });
-    
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
 
-// ========================================
-// CREATE INITIAL BOOKING ORDER (for first-time booking)
-// ========================================
-router.post('/create-booking-order', async (req, res) => {
-  try {
-    const { 
-      propertyId, 
-      ownerId, 
-      monthlyRent, 
-      securityDeposit,
-      propertyTitle,
-      tenantEmail 
-    } = req.body;
-    
-    console.log('💰 ==================== BOOKING ORDER ====================');
-    console.log('Property ID:', propertyId);
-    console.log('Monthly Rent:', monthlyRent);
-    console.log('Security Deposit:', securityDeposit);
-    
-    const baseAmount = monthlyRent + securityDeposit;
-    const convenienceFee = Math.round((baseAmount * 2.7) / 100);
-    const finalAmount = baseAmount + convenienceFee;
-    
-    console.log('💵 Calculation:');
-    console.log('   Base Amount: ₹' + baseAmount);
-    console.log('   Convenience Fee (2.7%): +₹' + convenienceFee);
-    console.log('   Final Amount: ₹' + finalAmount);
-    
-    const amountInPaise = Math.round(finalAmount * 100);
-    
-    const order = await razorpay.orders.create({
-      amount: amountInPaise,
-      currency: 'INR',
-      receipt: `booking_${Date.now()}`.substring(0, 40),
-      notes: {
-        type: 'initial_booking',
-        propertyId: propertyId,
-        ownerId: ownerId,
-        tenantEmail: tenantEmail,
-        monthlyRent: monthlyRent,
-        securityDeposit: securityDeposit,
-        convenienceFee: convenienceFee,
-        finalAmount: finalAmount,
-      },
-    });
-    
-    console.log('✅ Booking order created:', order.id);
-    console.log('💰 ==================== ORDER SUCCESS ====================\n');
-    
-    res.status(200).json({
-      success: true,
-      orderId: order.id,
-      amount: finalAmount,
-      key: process.env.RAZORPAY_KEY_ID,
-    });
-    
-  } catch (error) {
-    console.error('❌ Error creating booking order:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create order',
-      error: error.message,
-    });
-  }
-});
-
-// ========================================
 // CREATE TENANT RENT ORDER
-// ========================================
 router.post('/create-tenant-rent-order', async (req, res) => {
   try {
     const { bookingId, propertyId, monthsDuration, couponCode } = req.body;
@@ -405,10 +308,7 @@ router.post('/create-tenant-rent-order', async (req, res) => {
   }
 });
 
-// ========================================
-// ⭐ FIXED: VERIFY TENANT RENT PAYMENT
-// Properly saves payment to history
-// ========================================
+// VERIFY TENANT RENT PAYMENT
 router.post('/verify-tenant-rent-payment', async (req, res) => {
   try {
     const { 
@@ -442,7 +342,6 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
     
     console.log('✅ Payment signature verified');
     
-    // ⭐ Fetch payment from Razorpay to get amount
     const payment = await razorpay.payments.fetch(razorpay_payment_id);
     console.log('💳 Payment details from Razorpay:', {
       amount: payment.amount,
@@ -458,7 +357,6 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
       });
     }
     
-    // Get booking
     const booking = await Booking.findById(bookingId);
     
     if (!booking) {
@@ -482,14 +380,12 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
       });
     }
     
-    // ⭐ Calculate amounts from payment
-    const totalAmount = payment.amount / 100; // Convert from paise
+    const totalAmount = payment.amount / 100;
     const baseAmount = booking.monthlyRent * pricing.months;
     const durationDiscount = Math.round((baseAmount * pricing.discount) / 100);
     const afterDiscount = baseAmount - durationDiscount;
     const convenienceFee = Math.round((afterDiscount * 2.7) / 100);
     
-    // ⭐ Record payment with proper data
     const paymentData = {
       amount: totalAmount,
       monthsPaid: pricing.months,
@@ -538,8 +434,392 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
 });
 
 // ========================================
+// OWNER SERVICE CHARGE ROUTES
+// ========================================
+
+// ⭐ GET OWNER'S SERVICE CHARGE PAYMENTS
+router.get('/owner/:ownerId', async (req, res) => {
+  try {
+    const { ownerId } = req.params;
+    
+    console.log('📜 ==================== OWNER PAYMENT HISTORY ====================');
+    console.log('👤 Owner ID:', ownerId);
+    
+    if (!ownerId || ownerId.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Owner ID parameter is required'
+      });
+    }
+    
+    const properties = await Property.find({ ownerId: ownerId.trim() });
+    
+    console.log('🏠 Found', properties.length, 'properties for owner');
+    
+    if (properties.length === 0) {
+      console.log('⚠️ No properties found for owner:', ownerId);
+      return res.json({
+        success: true,
+        payments: [],
+        totalPayments: 0,
+        totalAmount: 0,
+        message: 'No properties found for this owner'
+      });
+    }
+    
+    const allPayments = [];
+    let totalAmount = 0;
+    
+    for (const property of properties) {
+      console.log(`📦 Processing property ${property._id}:`);
+      console.log(`   - Title: ${property.title}`);
+      console.log(`   - Payments in history: ${property.servicePaymentHistory?.length || 0}`);
+      
+      if (property.servicePaymentHistory && property.servicePaymentHistory.length > 0) {
+        property.servicePaymentHistory.forEach((payment, index) => {
+          console.log(`   💰 Payment ${index + 1}:`, {
+            amount: payment.amount,
+            monthsPaid: payment.monthsPaid,
+            paidAt: payment.paidAt,
+            paymentId: payment.paymentId
+          });
+          
+          const paymentDate = payment.paidAt || payment.createdAt || property.createdAt;
+          
+          allPayments.push({
+            _id: payment._id || payment.paymentId,
+            propertyId: property._id.toString(),
+            propertyTitle: property.title,
+            propertyType: property.type,
+            amount: Number(payment.amount || 0),
+            monthsPaid: Number(payment.monthsPaid || 1),
+            paymentType: 'service_charge',
+            status: payment.status || 'completed',
+            date: paymentDate,
+            paidAt: paymentDate,
+            createdAt: paymentDate,
+            paymentDate: paymentDate,
+            transactionId: payment.paymentId || '',
+            razorpayOrderId: payment.orderId || '',
+            validUntil: payment.validUntil,
+          });
+          
+          totalAmount += Number(payment.amount || 0);
+        });
+      } else {
+        console.log('   ℹ️ No payment history for this property');
+      }
+    }
+    
+    allPayments.sort((a, b) => new Date(b.date) - new Date(a.date));
+    
+    console.log('✅ Total payments found:', allPayments.length);
+    console.log('💰 Total amount:', totalAmount);
+    console.log('📜 ==================== HISTORY SUCCESS ====================\n');
+    
+    res.json({
+      success: true,
+      payments: allPayments,
+      totalPayments: allPayments.length,
+      totalAmount: totalAmount
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching owner payment history:', error);
+    console.error('Stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch payment history',
+      error: error.message
+    });
+  }
+});
+
+// CREATE OWNER SERVICE CHARGE ORDER
+router.post('/create-service-charge-order', async (req, res) => {
+  try {
+    const { propertyId, ownerId, monthsDuration, couponCode } = req.body;
+    
+    console.log('💰 ==================== OWNER SERVICE CHARGE ORDER ====================');
+    console.log('Property ID:', propertyId);
+    console.log('Owner ID:', ownerId);
+    console.log('Months Duration:', monthsDuration);
+    console.log('Coupon Code:', couponCode || 'None');
+    
+    if (!propertyId || !ownerId || !monthsDuration) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: propertyId, ownerId, monthsDuration'
+      });
+    }
+    
+    const property = await Property.findById(propertyId);
+    
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+    
+    const monthlyCharge = calculateServiceCharge(
+      property.type, 
+      property.beds || property.bedrooms, 
+      property.bhk
+    );
+    
+    const baseAmount = monthlyCharge * parseInt(monthsDuration);
+    
+    console.log('💵 Calculation:');
+    console.log('   Monthly Charge: ₹' + monthlyCharge);
+    console.log('   Months: ' + monthsDuration);
+    console.log('   Base Amount: ₹' + baseAmount);
+    
+    const couponResult = validateAndApplyCoupon(baseAmount, couponCode);
+    
+    if (!couponResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: couponResult.error,
+      });
+    }
+
+    let finalAmount = couponResult.finalAmount;
+    
+    if (couponResult.couponCode) {
+      console.log('🎟️ Coupon Applied:', couponResult.couponCode);
+      console.log('💰 Final Amount: ₹' + finalAmount);
+    }
+    
+    const amountInPaise = Math.round(finalAmount * 100);
+    
+    const order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: 'INR',
+      receipt: `svc_${Date.now()}`.substring(0, 40),
+      notes: {
+        type: 'owner_service_charge',
+        propertyId: propertyId,
+        ownerId: ownerId,
+        monthsDuration: monthsDuration,
+        monthlyCharge: monthlyCharge,
+        baseAmount: baseAmount,
+        couponCode: couponResult.couponCode || 'none',
+        couponDiscount: couponResult.discount || 0,
+        finalAmount: finalAmount,
+      },
+    });
+    
+    console.log('✅ Order created:', order.id);
+    console.log('💰 ==================== ORDER SUCCESS ====================\n');
+    
+    res.status(200).json({
+      success: true,
+      orderId: order.id,
+      amount: finalAmount,
+      baseAmount: baseAmount,
+      couponDiscount: couponResult.discount || 0,
+      couponPercent: couponResult.discountPercent || 0,
+      couponCode: couponResult.couponCode,
+      monthsDuration: monthsDuration,
+      currency: 'INR',
+      key: process.env.RAZORPAY_KEY_ID,
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creating service charge order:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create order',
+      error: error.message,
+    });
+  }
+});
+
+// ⭐ VERIFY OWNER SERVICE CHARGE PAYMENT - FIXED VERSION
+router.post('/verify-service-charge-payment', async (req, res) => {
+  try {
+    const { 
+      razorpay_order_id, 
+      razorpay_payment_id, 
+      razorpay_signature,
+      propertyId,
+      monthsDuration 
+    } = req.body;
+    
+    console.log('🔍 ==================== VERIFY SERVICE CHARGE ====================');
+    console.log('Order ID:', razorpay_order_id);
+    console.log('Payment ID:', razorpay_payment_id);
+    console.log('Property ID:', propertyId);
+    console.log('Months Duration:', monthsDuration);
+    
+    // Verify signature
+    const sign = razorpay_order_id + '|' + razorpay_payment_id;
+    const expectedSign = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(sign.toString())
+      .digest('hex');
+    
+    if (razorpay_signature !== expectedSign) {
+      console.error('❌ Invalid payment signature');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid signature' 
+      });
+    }
+    
+    console.log('✅ Payment signature verified');
+    
+    // ⭐ Fetch payment details from Razorpay
+    const payment = await razorpay.payments.fetch(razorpay_payment_id);
+    console.log('💳 Payment details:', {
+      amount: payment.amount,
+      status: payment.status,
+      method: payment.method
+    });
+    
+    if (payment.status !== 'captured' && payment.status !== 'authorized') {
+      console.error('❌ Payment not successful. Status:', payment.status);
+      return res.status(400).json({
+        success: false,
+        message: 'Payment not completed. Status: ' + payment.status
+      });
+    }
+    
+    // ⭐ Get property and update service status
+    const property = await Property.findById(propertyId);
+    
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property not found'
+      });
+    }
+    
+    console.log('📋 Property found:', property.title);
+    console.log('📅 Current due date:', property.serviceDueDate);
+    
+    const totalAmount = payment.amount / 100; // Convert from paise
+    const monthsDurationInt = parseInt(monthsDuration);
+    
+    // ⭐ Record payment using Property model method
+    const paymentData = {
+      amount: totalAmount,
+      monthsPaid: monthsDurationInt,
+      paymentId: razorpay_payment_id,
+      orderId: razorpay_order_id
+    };
+    
+    console.log('💾 Recording service charge payment:', JSON.stringify(paymentData, null, 2));
+    
+    try {
+      await property.recordPayment(paymentData);
+      console.log('✅ Service charge payment recorded successfully');
+      console.log('📅 New due date:', property.serviceDueDate);
+      console.log('📊 Total payments in history:', property.servicePaymentHistory.length);
+    } catch (saveError) {
+      console.error('❌ Error saving payment:', saveError);
+      console.error('Stack:', saveError.stack);
+      return res.status(500).json({
+        success: false,
+        message: 'Payment verified but failed to update property',
+        error: saveError.message
+      });
+    }
+    
+    console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
+    
+    res.json({ 
+      success: true, 
+      paymentId: razorpay_payment_id,
+      verified: true,
+      newDueDate: property.serviceDueDate,
+      status: property.serviceStatus,
+      totalPayments: property.servicePaymentHistory.length,
+      message: `Service charge paid for ${monthsDurationInt} month(s)`
+    });
+    
+  } catch (error) {
+    console.error('❌ Error verifying service charge payment:', error);
+    console.error('Stack:', error.stack);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ========================================
+// BOOKING ROUTES
+// ========================================
+
+router.post('/create-booking-order', async (req, res) => {
+  try {
+    const { 
+      propertyId, 
+      ownerId, 
+      monthlyRent, 
+      securityDeposit,
+      propertyTitle,
+      tenantEmail 
+    } = req.body;
+    
+    console.log('💰 ==================== BOOKING ORDER ====================');
+    console.log('Property ID:', propertyId);
+    console.log('Monthly Rent:', monthlyRent);
+    console.log('Security Deposit:', securityDeposit);
+    
+    const baseAmount = monthlyRent + securityDeposit;
+    const convenienceFee = Math.round((baseAmount * 2.7) / 100);
+    const finalAmount = baseAmount + convenienceFee;
+    
+    console.log('💵 Calculation:');
+    console.log('   Base Amount: ₹' + baseAmount);
+    console.log('   Convenience Fee (2.7%): +₹' + convenienceFee);
+    console.log('   Final Amount: ₹' + finalAmount);
+    
+    const amountInPaise = Math.round(finalAmount * 100);
+    
+    const order = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: 'INR',
+      receipt: `booking_${Date.now()}`.substring(0, 40),
+      notes: {
+        type: 'initial_booking',
+        propertyId: propertyId,
+        ownerId: ownerId,
+        tenantEmail: tenantEmail,
+        monthlyRent: monthlyRent,
+        securityDeposit: securityDeposit,
+        convenienceFee: convenienceFee,
+        finalAmount: finalAmount,
+      },
+    });
+    
+    console.log('✅ Booking order created:', order.id);
+    console.log('💰 ==================== ORDER SUCCESS ====================\n');
+    
+    res.status(200).json({
+      success: true,
+      orderId: order.id,
+      amount: finalAmount,
+      key: process.env.RAZORPAY_KEY_ID,
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creating booking order:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create order',
+      error: error.message,
+    });
+  }
+});
+
+// ========================================
 // BANK DETAILS ROUTES
 // ========================================
+
 router.post('/bank-details', async (req, res) => {
   try {
     const { accountHolderName, accountNumber, ifscCode, bankName, branchName, ownerId, email, phone } = req.body;
@@ -656,11 +936,8 @@ router.get('/bank-details/:ownerId', async (req, res) => {
 });
 
 // ========================================
-// OTHER PAYMENT ROUTES (keeping your existing functionality)
+// OTHER UTILITY ROUTES
 // ========================================
-
-// ... (keep all your other routes like create-order, verify-payment, etc.)
-// I'll include the essential ones:
 
 router.post('/create-order', async (req, res) => {
   try {
@@ -729,168 +1006,31 @@ router.get('/test-razorpay', async (req, res) => {
   }
 });
 
-// ========================================
-// CREATE OWNER SERVICE CHARGE ORDER (with duration support)
-// ========================================
-router.post('/create-service-charge-order', async (req, res) => {
+router.get('/debug/all-bookings', async (req, res) => {
   try {
-    const { propertyId, ownerId, monthsDuration, couponCode } = req.body;
+    const allBookings = await Booking.find({}).limit(10);
     
-    console.log('💰 ==================== OWNER SERVICE CHARGE ORDER ====================');
-    console.log('Property ID:', propertyId);
-    console.log('Owner ID:', ownerId);
-    console.log('Months Duration:', monthsDuration);
-    console.log('Coupon Code:', couponCode || 'None');
+    const bookingSummary = allBookings.map(booking => ({
+      _id: booking._id,
+      tenantEmail: booking.tenantEmail,
+      tenantName: booking.tenantName,
+      propertyTitle: booking.propertyTitle,
+      status: booking.status,
+      monthlyRent: booking.monthlyRent,
+      rentDueDate: booking.rentDueDate,
+      totalPaymentsInHistory: booking.rentPaymentHistory?.length || 0,
+      paymentHistory: booking.rentPaymentHistory || []
+    }));
     
-    if (!propertyId || !ownerId || !monthsDuration) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required fields: propertyId, ownerId, monthsDuration'
-      });
-    }
-    
-    // Get property to calculate charge
-    const property = await Property.findById(propertyId);
-    
-    if (!property) {
-      return res.status(404).json({
-        success: false,
-        message: 'Property not found'
-      });
-    }
-    
-    // Calculate monthly charge
-    const monthlyCharge = calculateServiceCharge(
-      property.type, 
-      property.beds || property.bedrooms, 
-      property.bhk
-    );
-    
-    // Calculate total for duration
-    const baseAmount = monthlyCharge * parseInt(monthsDuration);
-    
-    console.log('💵 Calculation:');
-    console.log('   Monthly Charge: ₹' + monthlyCharge);
-    console.log('   Months: ' + monthsDuration);
-    console.log('   Base Amount: ₹' + baseAmount);
-    
-    // Apply coupon if provided
-    const couponResult = validateAndApplyCoupon(baseAmount, couponCode);
-    
-    if (!couponResult.valid) {
-      return res.status(400).json({
-        success: false,
-        message: couponResult.error,
-      });
-    }
-
-    let finalAmount = couponResult.finalAmount;
-    
-    if (couponResult.couponCode) {
-      console.log('🎟️ Coupon Applied:', couponResult.couponCode);
-      console.log('💰 Final Amount: ₹' + finalAmount);
-    }
-    
-    const amountInPaise = Math.round(finalAmount * 100);
-    
-    const order = await razorpay.orders.create({
-      amount: amountInPaise,
-      currency: 'INR',
-      receipt: `svc_${Date.now()}`.substring(0, 40),
-      notes: {
-        type: 'owner_service_charge',
-        propertyId: propertyId,
-        ownerId: ownerId,
-        monthsDuration: monthsDuration,
-        monthlyCharge: monthlyCharge,
-        baseAmount: baseAmount,
-        couponCode: couponResult.couponCode || 'none',
-        couponDiscount: couponResult.discount || 0,
-        finalAmount: finalAmount,
-      },
-    });
-    
-    console.log('✅ Order created:', order.id);
-    console.log('💰 ==================== ORDER SUCCESS ====================\n');
-    
-    res.status(200).json({
+    res.json({
       success: true,
-      orderId: order.id,
-      amount: finalAmount,
-      baseAmount: baseAmount,
-      couponDiscount: couponResult.discount || 0,
-      couponPercent: couponResult.discountPercent || 0,
-      couponCode: couponResult.couponCode,
-      monthsDuration: monthsDuration,
-      currency: 'INR',
-      key: process.env.RAZORPAY_KEY_ID,
+      totalBookings: allBookings.length,
+      bookings: bookingSummary
     });
     
   } catch (error) {
-    console.error('❌ Error creating service charge order:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create order',
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ========================================
-// VERIFY OWNER SERVICE CHARGE PAYMENT
-// ========================================
-router.post('/verify-service-charge-payment', async (req, res) => {
-  try {
-    const { 
-      razorpay_order_id, 
-      razorpay_payment_id, 
-      razorpay_signature,
-      propertyId,
-      monthsDuration 
-    } = req.body;
-    
-    console.log('🔍 ==================== VERIFY SERVICE CHARGE ====================');
-    console.log('Order ID:', razorpay_order_id);
-    console.log('Payment ID:', razorpay_payment_id);
-    console.log('Property ID:', propertyId);
-    console.log('Months Duration:', monthsDuration);
-    
-    // Verify signature
-    const sign = razorpay_order_id + '|' + razorpay_payment_id;
-    const expectedSign = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-      .update(sign.toString())
-      .digest('hex');
-    
-    if (razorpay_signature !== expectedSign) {
-      console.error('❌ Invalid payment signature');
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid signature' 
-      });
-    }
-    
-    console.log('✅ Payment signature verified');
-    
-    // Update property service status
-    // You can add logic here to update property's service expiry date
-    // For example: property.serviceExpiryDate = new Date() + monthsDuration
-    
-    console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
-    
-    res.json({ 
-      success: true, 
-      paymentId: razorpay_payment_id,
-      verified: true,
-      message: `Service charge paid for ${monthsDuration} month(s)`
-    });
-    
-  } catch (error) {
-    console.error('❌ Error verifying service charge payment:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
-  }
-});
 module.exports = router;
