@@ -178,8 +178,15 @@ propertySchema.methods.recordPayment = async function(paymentData) {
   // ⭐ If current due date is in the past, start from now
   const baseDate = currentDueDate > now ? currentDueDate : now;
   
-  const newDueDate = new Date(baseDate);
-  newDueDate.setMonth(newDueDate.getMonth() + monthsPaid);
+  // ⭐ CRITICAL FIX: Use exact month calculation to avoid date issues
+  const newDueDate = new Date(
+    baseDate.getFullYear(),
+    baseDate.getMonth() + monthsPaid,
+    baseDate.getDate(),
+    baseDate.getHours(),
+    baseDate.getMinutes(),
+    baseDate.getSeconds()
+  );
   
   console.log('📅 Base date:', baseDate);
   console.log('📅 New due date:', newDueDate);
