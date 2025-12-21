@@ -991,12 +991,17 @@ router.post('/create-booking-order', async (req, res) => {
 });
 
 // ========================================
-// BANK DETAILS ROUTES
+// BANK DETAILS ROUTES - FIXED VERSION
 // ========================================
 
+// ⭐ FIX: Save bank details with correct field name "ifsc"
 router.post('/bank-details', async (req, res) => {
   try {
     const { accountHolderName, accountNumber, ifscCode, bankName, branchName, ownerId, email, phone } = req.body;
+    
+    console.log('🏦 ==================== SAVING BANK DETAILS ====================');
+    console.log('Owner ID:', ownerId);
+    console.log('IFSC Code received:', ifscCode);
     
     if (!phone || !email || !accountHolderName || !accountNumber || !ifscCode || !ownerId) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -1006,6 +1011,9 @@ router.post('/bank-details', async (req, res) => {
     if (!owner) {
       return res.status(404).json({ success: false, message: 'Owner not found' });
     }
+    
+    const ifscUpper = ifscCode.toUpperCase();
+    console.log('✅ IFSC Code (uppercase):', ifscUpper);
     
     if (ROUTE_API_AVAILABLE) {
       const contact = await razorpay.contacts.create({
@@ -1021,11 +1029,12 @@ router.post('/bank-details', async (req, res) => {
         account_type: 'bank_account',
         bank_account: {
           name: accountHolderName,
-          ifsc: ifscCode.toUpperCase(),
+          ifsc: ifscUpper, // Razorpay uses "ifsc"
           account_number: accountNumber,
         },
       });
       
+      // ⭐ FIX: Save as "ifsc" to match the User model schema
       await User.findByIdAndUpdate(owner._id, {
         $set: {
           razorpayContactId: contact.id,
@@ -1035,7 +1044,7 @@ router.post('/bank-details', async (req, res) => {
           bankDetails: {
             accountHolderName,
             accountNumber,
-            ifscCode: ifscCode.toUpperCase(),
+            ifsc: ifscUpper, // ⭐ Changed from "ifscCode" to "ifsc"
             bankName: bankName || '',
             branchName: branchName || '',
             verifiedAt: new Date(),
@@ -1044,13 +1053,22 @@ router.post('/bank-details', async (req, res) => {
         },
       });
       
+      console.log('✅ Bank details saved with IFSC:', ifscUpper);
+      console.log('🏦 ==================== SAVE SUCCESS ====================\n');
+      
       return res.status(200).json({
         success: true,
         message: 'Bank details saved successfully',
-        data: { contactId: contact.id, fundAccountId: fundAccount.id, autoTransferEnabled: true },
+        data: { 
+          contactId: contact.id, 
+          fundAccountId: fundAccount.id, 
+          autoTransferEnabled: true,
+          ifscCode: ifscUpper // Return as ifscCode for frontend compatibility
+        },
       });
     }
     
+    // ⭐ FIX: Save as "ifsc" even without Razorpay Route API
     await User.findByIdAndUpdate(owner._id, {
       $set: {
         'personalDetails.phone': phone,
@@ -1058,7 +1076,7 @@ router.post('/bank-details', async (req, res) => {
         bankDetails: {
           accountHolderName,
           accountNumber,
-          ifscCode: ifscCode.toUpperCase(),
+          ifsc: ifscUpper, // ⭐ Changed from "ifscCode" to "ifsc"
           bankName: bankName || '',
           branchName: branchName || '',
           verifiedAt: new Date(),
@@ -1067,10 +1085,16 @@ router.post('/bank-details', async (req, res) => {
       },
     });
     
+    console.log('✅ Bank details saved with IFSC:', ifscUpper);
+    console.log('🏦 ==================== SAVE SUCCESS ====================\n');
+    
     return res.status(200).json({
       success: true,
       message: 'Bank details saved successfully',
-      data: { autoTransferEnabled: false },
+      data: { 
+        autoTransferEnabled: false,
+        ifscCode: ifscUpper // Return as ifscCode for frontend compatibility
+      },
     });
     
   } catch (error) {
@@ -1079,36 +1103,51 @@ router.post('/bank-details', async (req, res) => {
   }
 });
 
+// ⭐ FIX: Retrieve bank details with correct field name "ifsc"
 router.get('/bank-details/:ownerId', async (req, res) => {
   try {
+    console.log('🏦 ==================== RETRIEVING BANK DETAILS ====================');
+    console.log('Owner ID:', req.params.ownerId);
+    
     const owner = await User.findById(req.params.ownerId);
+    
     if (!owner || !owner.bankDetails) {
+      console.log('⚠️ No bank details found');
       return res.status(404).json({ success: false, message: 'No bank details found' });
     }
+    
+    console.log('📋 Bank Details Object:', owner.bankDetails);
+    console.log('🔑 IFSC field value:', owner.bankDetails.ifsc); // ⭐ Using "ifsc"
     
     const maskedAccountNumber = owner.bankDetails.accountNumber
       ? `****${owner.bankDetails.accountNumber.slice(-4)}`
       : null;
     
+    // ⭐ FIX: Read from "ifsc" field, return as "ifscCode" for frontend
+    const responseData = {
+      accountHolderName: owner.bankDetails.accountHolderName,
+      accountNumber: maskedAccountNumber,
+      ifscCode: owner.bankDetails.ifsc, // ⭐ Read "ifsc", return as "ifscCode"
+      bankName: owner.bankDetails.bankName,
+      branchName: owner.bankDetails.branchName,
+      verifiedAt: owner.bankDetails.verifiedAt,
+      status: owner.bankDetails.status || 'active',
+      hasRazorpayLinked: !!(owner.razorpayContactId && owner.razorpayFundAccountId),
+      autoTransferEnabled: !!(owner.razorpayFundAccountId),
+    };
+    
+    console.log('✅ Returning IFSC Code:', responseData.ifscCode);
+    console.log('🏦 ==================== RETRIEVE SUCCESS ====================\n');
+    
     res.json({
       success: true,
-      data: {
-        accountHolderName: owner.bankDetails.accountHolderName,
-        accountNumber: maskedAccountNumber,
-        ifscCode: owner.bankDetails.ifscCode,
-        bankName: owner.bankDetails.bankName,
-        branchName: owner.bankDetails.branchName,
-        verifiedAt: owner.bankDetails.verifiedAt,
-        status: owner.bankDetails.status || 'active',
-        hasRazorpayLinked: !!(owner.razorpayContactId && owner.razorpayFundAccountId),
-        autoTransferEnabled: !!(owner.razorpayFundAccountId),
-      },
+      data: responseData,
     });
   } catch (error) {
+    console.error('❌ Error retrieving bank details:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch bank details', error: error.message });
   }
 });
-
 // ========================================
 // OTHER UTILITY ROUTES
 // ========================================
