@@ -1,8 +1,10 @@
 // ========================================
-// UPDATED PROPERTY MODEL - WITH MONTHLY SUBSCRIPTION
-// File: models/property.js
-// ✅ Adds monthly service charge tracking
-// ✅ Auto-deactivation after 10-day grace period
+// FINAL PROPERTY MODEL - COMPLETE & FIXED
+// File: models/Property.js
+// ✅ Monthly service charge tracking
+// ✅ Payment history with proper validation
+// ✅ Auto-deactivation after grace period
+// ✅ Fixed recordPayment method
 // ========================================
 
 const mongoose = require('mongoose');
@@ -59,7 +61,7 @@ const propertySchema = new mongoose.Schema(
     isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
     
-    // ⭐ NEW: Service Charge/Subscription Fields
+    // ⭐ Service Charge/Subscription Fields
     serviceDueDate: { 
       type: Date, 
       default: function() {
@@ -102,6 +104,10 @@ const propertySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// ========================================
+// INSTANCE METHODS
+// ========================================
+
 // ⭐ METHOD: Calculate service charge based on property type
 propertySchema.methods.calculateServiceCharge = function() {
   const RATE_PER_UNIT = 18;
@@ -143,9 +149,14 @@ propertySchema.methods.getPaymentStatus = function() {
   }
 };
 
-// ⭐ METHOD: Update payment and extend service date
-propertySchema.methods.recordPayment = function(paymentData) {
-  console.log('🔍 recordPayment called with:', paymentData);
+// ⭐ METHOD: Update payment and extend service date - FIXED VERSION
+propertySchema.methods.recordPayment = async function(paymentData) {
+  console.log('🔍 recordPayment called with:', JSON.stringify(paymentData, null, 2));
+  
+  // Validate required fields
+  if (!paymentData.amount || !paymentData.monthsPaid) {
+    throw new Error(`Missing required fields: amount=${paymentData.amount}, monthsPaid=${paymentData.monthsPaid}`);
+  }
   
   // Explicitly extract and validate fields
   const amount = Number(paymentData.amount);
@@ -153,20 +164,28 @@ propertySchema.methods.recordPayment = function(paymentData) {
   const paymentId = String(paymentData.paymentId || '');
   const orderId = String(paymentData.orderId || '');
   
-  console.log('💰 Extracted amount:', amount);
-  console.log('📅 Extracted monthsPaid:', monthsPaid);
+  console.log('💰 Validated amount:', amount);
+  console.log('📅 Validated monthsPaid:', monthsPaid);
   
-  if (!amount || !monthsPaid || isNaN(amount) || isNaN(monthsPaid)) {
+  if (isNaN(amount) || isNaN(monthsPaid) || amount <= 0 || monthsPaid <= 0) {
     throw new Error(`Invalid payment data: amount=${amount}, monthsPaid=${monthsPaid}`);
   }
   
   // Calculate new due date
   const currentDueDate = this.serviceDueDate || new Date();
-  const newDueDate = new Date(currentDueDate);
+  const now = new Date();
+  
+  // ⭐ If current due date is in the past, start from now
+  const baseDate = currentDueDate > now ? currentDueDate : now;
+  
+  const newDueDate = new Date(baseDate);
   newDueDate.setMonth(newDueDate.getMonth() + monthsPaid);
   
-  console.log('📅 Current due date:', currentDueDate);
+  console.log('📅 Base date:', baseDate);
   console.log('📅 New due date:', newDueDate);
+  
+  // Calculate valid until date
+  const validUntil = new Date(newDueDate);
   
   // Create payment history entry with explicit field assignment
   const paymentEntry = {
@@ -175,21 +194,16 @@ propertySchema.methods.recordPayment = function(paymentData) {
     paidAt: new Date(),
     paymentId: paymentId,
     orderId: orderId,
-    validUntil: newDueDate,
+    validUntil: validUntil,
     status: 'completed'
   };
   
   console.log('💾 Payment entry to save:', JSON.stringify(paymentEntry, null, 2));
   
-  // Validate before pushing
-  if (!paymentEntry.amount || !paymentEntry.monthsPaid) {
-    throw new Error('Payment entry validation failed before push');
-  }
-  
-  // Add to payment history using create() to trigger subdocument validation
+  // Add to payment history
   this.servicePaymentHistory.push(paymentEntry);
   
-  // Update fields
+  // Update property fields
   this.serviceDueDate = newDueDate;
   this.serviceStatus = 'active';
   this.lastServicePayment = new Date();
@@ -202,8 +216,18 @@ propertySchema.methods.recordPayment = function(paymentData) {
   console.log('📊 Payment history length:', this.servicePaymentHistory.length);
   console.log('📊 Last entry:', JSON.stringify(this.servicePaymentHistory[this.servicePaymentHistory.length - 1], null, 2));
   
-  return this.save();
+  // Save and return
+  const saved = await this.save();
+  
+  console.log('✅ Property saved successfully');
+  console.log('📊 Verified payment count:', saved.servicePaymentHistory.length);
+  
+  return saved;
 };
+
+// ========================================
+// STATIC METHODS
+// ========================================
 
 // ⭐ STATIC METHOD: Find properties that need status update
 propertySchema.statics.findPropertiesNeedingUpdate = async function() {
@@ -243,6 +267,39 @@ propertySchema.statics.suspendOverdueProperties = async function() {
   
   console.log(`⏸️ Suspended ${result.modifiedCount} properties for non-payment`);
   return result;
+};
+
+// ⭐ STATIC METHOD: Update all property statuses (for cron job)
+propertySchema.statics.updateAllStatuses = async function() {
+  console.log('🔄 Updating all property statuses...');
+  
+  const now = new Date();
+  
+  // Update 'active' properties that are now 'due'
+  await this.updateMany(
+    {
+      serviceDueDate: { 
+        $lte: new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000),
+        $gt: now
+      },
+      serviceStatus: 'active'
+    },
+    { $set: { serviceStatus: 'due' } }
+  );
+  
+  // Update 'due' properties that are now 'overdue'
+  await this.updateMany(
+    {
+      serviceDueDate: { $lt: now },
+      serviceStatus: { $in: ['active', 'due'] }
+    },
+    { $set: { serviceStatus: 'overdue' } }
+  );
+  
+  // Suspend properties past grace period
+  await this.suspendOverdueProperties();
+  
+  console.log('✅ All property statuses updated');
 };
 
 module.exports = mongoose.model('Property', propertySchema, 'properties');
