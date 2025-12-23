@@ -1,5 +1,5 @@
 // models/Booking.js
-// ⭐ FIXED: Booking Model with proper payment history tracking
+// ⭐ FIXED: Booking Model with tenantDocuments support + payment history tracking
 const mongoose = require('mongoose');
 
 const bookingSchema = new mongoose.Schema({
@@ -39,9 +39,44 @@ const bookingSchema = new mongoose.Schema({
     paidAt: { type: Date, default: Date.now }
   }],
   
+  // ⭐⭐ NEW: Tenant Documents - Stores Cloudinary URLs
+  tenantDocuments: {
+    type: Map,
+    of: String,
+    default: {}
+  },
+  
+  // ⭐⭐ NEW: Track when documents were last updated
+  documentsUploadedAt: {
+    type: Date,
+    default: null
+  },
+  
   bookingDate: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
+}, {
+  // ⭐⭐ IMPORTANT: This ensures Map fields are properly serialized
+  toJSON: { 
+    getters: true,
+    transform: function(doc, ret) {
+      // Convert Map to plain object for JSON
+      if (ret.tenantDocuments instanceof Map) {
+        ret.tenantDocuments = Object.fromEntries(ret.tenantDocuments);
+      }
+      return ret;
+    }
+  },
+  toObject: { 
+    getters: true,
+    transform: function(doc, ret) {
+      // Convert Map to plain object
+      if (ret.tenantDocuments instanceof Map) {
+        ret.tenantDocuments = Object.fromEntries(ret.tenantDocuments);
+      }
+      return ret;
+    }
+  }
 });
 
 // ⭐ FIXED: Method to record rent payment and extend due date
@@ -102,6 +137,72 @@ bookingSchema.methods.getPaymentStatus = function() {
   if (daysUntilDue <= 7) return 'due_soon';
   return 'active';
 };
+
+// ⭐⭐ NEW: Method to update tenant documents
+bookingSchema.methods.updateDocuments = async function(documents) {
+  console.log('📄 Updating tenant documents for booking:', this._id);
+  console.log('   Documents:', documents);
+  
+  // Update tenantDocuments Map
+  this.tenantDocuments = new Map(Object.entries(documents));
+  this.documentsUploadedAt = new Date();
+  this.updatedAt = new Date();
+  
+  await this.save();
+  
+  console.log('✅ Documents updated successfully');
+  console.log('   Total documents:', this.tenantDocuments.size);
+  
+  return this;
+};
+
+// ⭐⭐ NEW: Method to add a single document
+bookingSchema.methods.addDocument = async function(documentKey, documentUrl) {
+  console.log(`📄 Adding document "${documentKey}" to booking:`, this._id);
+  console.log('   URL:', documentUrl);
+  
+  if (!this.tenantDocuments) {
+    this.tenantDocuments = new Map();
+  }
+  
+  this.tenantDocuments.set(documentKey, documentUrl);
+  this.documentsUploadedAt = new Date();
+  this.updatedAt = new Date();
+  
+  await this.save();
+  
+  console.log('✅ Document added successfully');
+  
+  return this;
+};
+
+// ⭐⭐ NEW: Method to remove a document
+bookingSchema.methods.removeDocument = async function(documentKey) {
+  console.log(`🗑️ Removing document "${documentKey}" from booking:`, this._id);
+  
+  if (this.tenantDocuments) {
+    this.tenantDocuments.delete(documentKey);
+    this.updatedAt = new Date();
+    await this.save();
+    console.log('✅ Document removed successfully');
+  }
+  
+  return this;
+};
+
+// ⭐⭐ NEW: Method to get all documents as plain object
+bookingSchema.methods.getDocuments = function() {
+  if (!this.tenantDocuments) {
+    return {};
+  }
+  return Object.fromEntries(this.tenantDocuments);
+};
+
+// Pre-save middleware to ensure updatedAt is always current
+bookingSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
+});
 
 // Export with check to prevent OverwriteModelError
 module.exports = mongoose.models.Booking || mongoose.model('Booking', bookingSchema);
