@@ -230,6 +230,5 @@ userSchema.methods.toJSON = function() {
   return userObject;
 };
 
-const User = mongoose.model('User', userSchema);
-
-module.exports = User;
+// ✅ FIXED: Check if model exists before creating to prevent overwrite error
+module.exports = mongoose.models.User || mongoose.model('User', userSchema);

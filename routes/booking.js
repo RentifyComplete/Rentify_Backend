@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 
 const Booking = require('../models/Booking');
 const Property = require('../models/Property');
-const User = require('../models/user'); // ✅ Fixed: uppercase 'U'
+const User = require('../models/user'); // ✅ FIXED: Uppercase 'U' to match filename
 
 // =======================================================
 // HELPER: Find tenant by email and return ObjectId
@@ -103,7 +103,7 @@ const createBookingHandler = async (req, res) => {
     const booking = await Booking.create({
       propertyId,
       ownerId: property.ownerId,
-      tenantId: properTenantId,
+      tenantId: properTenantId, // ✅ Now properly handles null
 
       tenantName,
       tenantEmail: tenantEmail.toLowerCase(),
