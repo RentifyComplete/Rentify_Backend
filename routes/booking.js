@@ -1,16 +1,12 @@
-// routes/booking.js
-// Complete booking routes with CASCADE DELETE endpoint + /create endpoint
-// ⭐ FIXED: /create endpoint now includes orderId, paymentId, leaseDuration, totalAmount
-
 const express = require('express');
 const router = express.Router();
+
 const Booking = require('../models/Booking');
 const Property = require('../models/Property');
-const User = require('../models/user');
 
-// ============================================================================
-// CREATE BOOKING (Primary endpoint - POST /)
-// ============================================================================
+// =======================================================
+// CREATE BOOKING  (POST /api/bookings)
+// =======================================================
 router.post('/', async (req, res) => {
   try {
     const {
@@ -20,164 +16,23 @@ router.post('/', async (req, res) => {
       tenantEmail,
       tenantPhone,
       moveInDate,
-      rentAmount,
-      securityDeposit,
-      convenienceFee,
-      totalAmount,
-      leaseDuration,
-      orderId,
-      paymentId,
-      status = 'active'
-    } = req.body;
-
-    console.log('📋 Creating new booking...');
-    console.log('Property ID:', propertyId);
-    console.log('Tenant ID:', tenantId);
-    console.log('Tenant Email:', tenantEmail);
-
-    // Validate required fields
-    if (!propertyId || !tenantEmail) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required fields: propertyId, tenantEmail'
-      });
-    }
-
-    // Check if property exists
-    const property = await Property.findById(propertyId);
-    if (!property) {
-      return res.status(404).json({
-        success: false,
-        message: 'Property not found'
-      });
-    }
-
-    // Check if tenant already has a booking for this property
-    const existingBooking = await Booking.findOne({
-      propertyId,
-      tenantEmail,
-      status: { $in: ['pending', 'active'] }
-    });
-
-    if (existingBooking) {
-      return res.status(400).json({
-        success: false,
-        message: 'You already have an active booking for this property'
-      });
-    }
-
-    // Calculate rent due date
-    const moveInDateObj = moveInDate ? new Date(moveInDate) : new Date();
-    const rentDueDate = new Date(moveInDateObj);
-    rentDueDate.setMonth(rentDueDate.getMonth() + (parseInt(leaseDuration) || 1));
-
-    // Create new booking
-    const newBooking = new Booking({
-      propertyId,
-      tenantId: tenantId || tenantEmail,
-      tenantName: tenantName || 'Tenant',
-      tenantEmail,
-      tenantPhone: tenantPhone || '',
-      monthlyRent: parseInt(rentAmount) || property.price,
-      securityDeposit: parseInt(securityDeposit) || 0,
-      convenienceFee: parseInt(convenienceFee) || 0,
-      totalAmount: parseInt(totalAmount) || (parseInt(rentAmount) + parseInt(securityDeposit)),
-      moveInDate: moveInDateObj,
-      leaseDuration: parseInt(leaseDuration) || 1,
-      orderId: orderId || 'pending',
-      paymentId: paymentId || 'pending',
-      status,
-      rentDueDate,
-      lastRentPayment: new Date(),
-      propertyTitle: property.title,
-      propertyAddress: property.address || property.location,
-      propertyLocation: property.location,
-      propertyType: property.type,
-      ownerId: property.ownerId
-    });
-
-    await newBooking.save();
-
-    console.log('✅ Booking created successfully:', newBooking._id);
-
-    res.status(201).json({
-      success: true,
-      message: 'Booking created successfully',
-      booking: newBooking
-    });
-
-  } catch (error) {
-    console.error('❌ Error creating booking:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create booking',
-      error: error.message
-    });
-  }
-});
-
-// ============================================================================
-// ⭐ CREATE BOOKING (Alternative endpoint - POST /create)
-// For apps that call /api/bookings/create
-// ⭐ FIXED: Now includes ALL required fields
-// ============================================================================
-router.post('/create', async (req, res) => {
-  try {
-    const {
-      propertyId,
-      tenantId,
-      tenantName,
-      tenantEmail,
-      tenantPhone,
-      moveInDate,
       monthlyRent,
-      rentAmount,
       securityDeposit,
       convenienceFee,
       totalAmount,
       leaseDuration,
       orderId,
       paymentId,
-      status = 'active',
       notes
     } = req.body;
 
-    console.log('📋 ==================== CREATE BOOKING ====================');
-    console.log('Property ID:', propertyId);
-    console.log('Tenant Email:', tenantEmail);
-    console.log('Monthly Rent:', monthlyRent || rentAmount);
-    console.log('Security Deposit:', securityDeposit);
-    console.log('Convenience Fee:', convenienceFee);
-    console.log('Total Amount:', totalAmount);
-    console.log('Lease Duration:', leaseDuration);
-    console.log('Payment ID:', paymentId);
-    console.log('Order ID:', orderId);
-
-    // Validate required fields
-    if (!propertyId || !tenantEmail) {
+    if (!propertyId || !tenantEmail || !orderId || !paymentId) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields: propertyId, tenantEmail'
+        message: 'Missing required booking or payment fields'
       });
     }
 
-    // Validate payment fields
-    if (!orderId || !paymentId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing payment information: orderId, paymentId'
-      });
-    }
-
-    // Validate booking fields
-    if (!leaseDuration || !totalAmount) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing booking details: leaseDuration, totalAmount'
-      });
-    }
-
-    // Check if property exists
     const property = await Property.findById(propertyId);
     if (!property) {
       return res.status(404).json({
@@ -186,74 +41,63 @@ router.post('/create', async (req, res) => {
       });
     }
 
-    console.log('✅ Property found:', property.title);
-
-    // Check if tenant already has an active booking for this property
-    const existingBooking = await Booking.findOne({
+    // Prevent duplicate active booking
+    const existing = await Booking.findOne({
       propertyId,
       tenantEmail,
       status: { $in: ['pending', 'active'] }
     });
 
-    if (existingBooking) {
-      console.log('⚠️ Existing booking found:', existingBooking._id);
+    if (existing) {
       return res.status(400).json({
         success: false,
-        message: 'You already have an active booking for this property'
+        message: 'Active booking already exists for this property'
       });
     }
 
-    // Use rentAmount or monthlyRent, fallback to property price
-    const finalRentAmount = rentAmount || monthlyRent || property.price;
+    // Dates
+    const moveIn = moveInDate ? new Date(moveInDate) : new Date();
+    const dueDate = new Date(moveIn);
+    dueDate.setMonth(dueDate.getMonth() + Number(leaseDuration || 1));
 
-    // Calculate rent due date (move-in date + lease duration)
-    const moveInDateObj = moveInDate ? new Date(moveInDate) : new Date();
-    const rentDueDate = new Date(moveInDateObj);
-    rentDueDate.setMonth(rentDueDate.getMonth() + parseInt(leaseDuration));
-
-    console.log('📅 Move-in Date:', moveInDateObj);
-    console.log('📅 Initial Rent Due Date:', rentDueDate);
-
-    // Create new booking with ALL required fields
-    const newBooking = new Booking({
+    const booking = await Booking.create({
       propertyId,
-      tenantId: tenantId || tenantEmail, // Use email as fallback
-      tenantName: tenantName || 'Tenant',
+      ownerId: property.ownerId,
+      tenantId: tenantId || null,
+
+      tenantName,
       tenantEmail,
-      tenantPhone: tenantPhone || '',
-      monthlyRent: parseInt(finalRentAmount),
-      securityDeposit: parseInt(securityDeposit) || 0,
-      convenienceFee: parseInt(convenienceFee) || 0,
-      totalAmount: parseInt(totalAmount),
-      moveInDate: moveInDateObj,
-      leaseDuration: parseInt(leaseDuration),
-      orderId,
-      paymentId,
-      status,
-      notes: notes || '',
-      rentDueDate,
-      lastRentPayment: new Date(), // Initial payment
+      tenantPhone,
+
       propertyTitle: property.title,
       propertyAddress: property.address || property.location,
-      propertyLocation: property.location,
-      propertyType: property.type,
-      ownerId: property.ownerId
+
+      // ✅ FIX: nullish coalescing (prevents 0 / 1 bugs)
+      monthlyRent: Number(monthlyRent ?? property.price),
+      securityDeposit: Number(securityDeposit ?? 0),
+      convenienceFee: Number(convenienceFee ?? 0),
+      totalAmount: Number(totalAmount),
+
+      moveInDate: moveIn,
+      leaseDuration: Number(leaseDuration),
+
+      orderId,
+      paymentId,
+      notes: notes || '',
+
+      rentDueDate: dueDate,
+      lastRentPayment: new Date(),
+      status: 'active'
     });
-
-    await newBooking.save();
-
-    console.log('✅ Booking created successfully:', newBooking._id);
-    console.log('📋 ==================== BOOKING SUCCESS ====================\n');
 
     res.status(201).json({
       success: true,
       message: 'Booking created successfully',
-      booking: newBooking
+      booking
     });
 
   } catch (error) {
-    console.error('❌ Error creating booking:', error);
-    console.error('Stack trace:', error.stack);
+    console.error('❌ Booking create error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to create booking',
@@ -262,129 +106,23 @@ router.post('/create', async (req, res) => {
   }
 });
 
-// ============================================================================
-// GET ALL BOOKINGS FOR A TENANT (by email)
-// ============================================================================
-router.get('/tenant/:email', async (req, res) => {
+
+// =======================================================
+// RECORD RENT PAYMENT
+// POST /api/bookings/:id/rent
+// =======================================================
+router.post('/:id/rent', async (req, res) => {
   try {
-    const { email } = req.params;
+    const { amount, monthsPaid, convenienceFee, paymentId, orderId } = req.body;
 
-    console.log('📋 Fetching bookings for tenant email:', email);
-
-    // Try both tenantId and tenantEmail fields
-    const bookings = await Booking.find({
-      $or: [
-        { tenantId: email },
-        { tenantEmail: email }
-      ]
-    }).sort({ createdAt: -1 });
-
-    console.log(`✅ Found ${bookings.length} bookings for tenant`);
-
-    res.status(200).json({
-      success: true,
-      bookings
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching tenant bookings:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch bookings',
-      error: error.message
-    });
-  }
-});
-
-// ============================================================================
-// GET ALL BOOKINGS FOR AN OWNER
-// ============================================================================
-router.get('/owner/:ownerId', async (req, res) => {
-  try {
-    const { ownerId } = req.params;
-
-    console.log('📋 Fetching bookings for owner:', ownerId);
-
-    // Find all bookings where ownerId matches
-    const bookings = await Booking.find({ ownerId }).sort({ createdAt: -1 });
-
-    console.log(`✅ Found ${bookings.length} bookings for owner`);
-
-    res.status(200).json({
-      success: true,
-      bookings
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching owner bookings:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch bookings',
-      error: error.message
-    });
-  }
-});
-
-// ============================================================================
-// GET SINGLE BOOKING BY ID
-// ============================================================================
-router.get('/:bookingId', async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-
-    console.log('📋 Fetching booking:', bookingId);
-
-    const booking = await Booking.findById(bookingId);
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found'
-      });
-    }
-
-    console.log('✅ Booking found');
-
-    res.status(200).json({
-      success: true,
-      booking
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching booking:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch booking',
-      error: error.message
-    });
-  }
-});
-
-// ============================================================================
-// UPDATE BOOKING STATUS
-// ============================================================================
-router.put('/:bookingId/status', async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-    const { status } = req.body;
-
-    console.log('📋 Updating booking status:', bookingId);
-    console.log('New status:', status);
-
-    const validStatuses = ['pending', 'active', 'completed', 'cancelled'];
-    if (!validStatuses.includes(status)) {
+    if (!amount || !paymentId || !orderId) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid status. Must be one of: pending, active, completed, cancelled'
+        message: 'Missing required rent payment fields'
       });
     }
 
-    const booking = await Booking.findByIdAndUpdate(
-      bookingId,
-      { status, updatedAt: new Date() },
-      { new: true }
-    );
-
+    const booking = await Booking.findById(req.params.id);
     if (!booking) {
       return res.status(404).json({
         success: false,
@@ -392,43 +130,88 @@ router.put('/:bookingId/status', async (req, res) => {
       });
     }
 
-    console.log('✅ Booking status updated');
+    await booking.recordRentPayment({
+      amount,
+      monthsPaid,
+      convenienceFee,
+      paymentId,
+      orderId
+    });
 
-    res.status(200).json({
+    res.json({
       success: true,
-      message: 'Booking status updated successfully',
+      message: 'Rent payment recorded successfully',
       booking
     });
 
   } catch (error) {
-    console.error('❌ Error updating booking status:', error);
+    console.error('❌ Rent payment error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to update booking status',
+      message: 'Failed to record rent payment',
       error: error.message
     });
   }
 });
 
-// ============================================================================
-// UPDATE BOOKING DETAILS
-// ============================================================================
-router.put('/:bookingId', async (req, res) => {
+
+// =======================================================
+// GET BOOKINGS FOR TENANT
+// =======================================================
+router.get('/tenant/:email', async (req, res) => {
   try {
-    const { bookingId } = req.params;
-    const updates = req.body;
+    const bookings = await Booking.find({
+      tenantEmail: req.params.email
+    }).sort({ createdAt: -1 });
 
-    console.log('📋 Updating booking:', bookingId);
+    res.json({ success: true, bookings });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-    // Add updatedAt timestamp
-    updates.updatedAt = new Date();
 
-    const booking = await Booking.findByIdAndUpdate(
-      bookingId,
-      updates,
-      { new: true, runValidators: true }
-    );
+// =======================================================
+// GET BOOKINGS FOR OWNER
+// =======================================================
+router.get('/owner/:ownerId', async (req, res) => {
+  try {
+    const bookings = await Booking.find({
+      ownerId: req.params.ownerId
+    }).sort({ createdAt: -1 });
 
+    res.json({ success: true, bookings });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+// =======================================================
+// GET SINGLE BOOKING
+// =======================================================
+router.get('/:id', async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+    res.json({ success: true, booking });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+// =======================================================
+// UPDATE BOOKING (DOCUMENT SAFE)
+// =======================================================
+router.put('/:id', async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id);
     if (!booking) {
       return res.status(404).json({
         success: false,
@@ -436,358 +219,96 @@ router.put('/:bookingId', async (req, res) => {
       });
     }
 
-    console.log('✅ Booking updated successfully');
+    // ✅ Document-safe update
+    if (req.body.tenantDocuments) {
+      await booking.updateDocuments(req.body.tenantDocuments);
+    }
 
-    res.status(200).json({
+    Object.keys(req.body).forEach((key) => {
+      if (key !== 'tenantDocuments') {
+        booking[key] = req.body[key];
+      }
+    });
+
+    booking.updatedAt = new Date();
+    await booking.save();
+
+    res.json({
       success: true,
       message: 'Booking updated successfully',
       booking
     });
 
   } catch (error) {
-    console.error('❌ Error updating booking:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update booking',
-      error: error.message
-    });
+    console.error('❌ Update booking error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ============================================================================
-// DELETE SINGLE BOOKING
-// ============================================================================
-router.delete('/:bookingId', async (req, res) => {
+
+// =======================================================
+// UPDATE STATUS
+// =======================================================
+router.put('/:id/status', async (req, res) => {
   try {
-    const { bookingId } = req.params;
+    const { status } = req.body;
+    const allowed = ['pending', 'active', 'completed', 'cancelled'];
 
-    console.log('🗑️ Deleting booking:', bookingId);
-
-    const booking = await Booking.findByIdAndDelete(bookingId);
-
-    if (!booking) {
-      return res.status(404).json({
+    if (!allowed.includes(status)) {
+      return res.status(400).json({
         success: false,
-        message: 'Booking not found'
+        message: 'Invalid status'
       });
     }
 
-    console.log('✅ Booking deleted successfully');
+    const booking = await Booking.findByIdAndUpdate(
+      req.params.id,
+      { status, updatedAt: new Date() },
+      { new: true }
+    );
 
-    res.status(200).json({
-      success: true,
-      message: 'Booking deleted successfully'
-    });
+    if (!booking) {
+      return res.status(404).json({ success: false });
+    }
 
+    res.json({ success: true, booking });
   } catch (error) {
-    console.error('❌ Error deleting booking:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to delete booking',
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ============================================================================
-// ⭐ CASCADE DELETE - DELETE ALL BOOKINGS FOR A PROPERTY
-// This is called when an owner deletes a property
-// ============================================================================
+
+// =======================================================
+// DELETE SINGLE BOOKING
+// =======================================================
+router.delete('/:id', async (req, res) => {
+  try {
+    const booking = await Booking.findByIdAndDelete(req.params.id);
+    if (!booking) {
+      return res.status(404).json({ success: false });
+    }
+    res.json({ success: true, message: 'Booking deleted' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+// =======================================================
+// CASCADE DELETE (PROPERTY)
+// =======================================================
 router.delete('/property/:propertyId', async (req, res) => {
   try {
-    const { propertyId } = req.params;
+    const result = await Booking.deleteMany({
+      propertyId: req.params.propertyId
+    });
 
-    console.log('🗑️ ==================== DELETE PROPERTY BOOKINGS ====================');
-    console.log('Property ID:', propertyId);
-
-    // Find all bookings for this property (for logging)
-    const bookingsToDelete = await Booking.find({ propertyId });
-    
-    console.log(`📋 Found ${bookingsToDelete.length} booking(s) to delete`);
-
-    if (bookingsToDelete.length > 0) {
-      console.log('📋 Bookings to be deleted:');
-      bookingsToDelete.forEach((booking, index) => {
-        console.log(`  ${index + 1}. Booking ID: ${booking._id}`);
-        console.log(`     Tenant: ${booking.tenantEmail}`);
-        console.log(`     Status: ${booking.status}`);
-        console.log(`     Property: ${booking.propertyTitle}`);
-      });
-    }
-
-    // Delete all bookings for this property
-    const result = await Booking.deleteMany({ propertyId });
-
-    console.log(`✅ Successfully deleted ${result.deletedCount} booking(s)`);
-    console.log('🗑️ ==================== DELETE SUCCESS ====================\n');
-
-    res.status(200).json({
+    res.json({
       success: true,
-      message: `${result.deletedCount} booking(s) deleted successfully`,
-      deletedCount: result.deletedCount,
+      deletedCount: result.deletedCount
     });
-
   } catch (error) {
-    console.error('❌ Error deleting bookings for property:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to delete bookings',
-      error: error.message,
-    });
-  }
-});
-
-// ============================================================================
-// GET BOOKINGS BY STATUS
-// ============================================================================
-router.get('/status/:status', async (req, res) => {
-  try {
-    const { status } = req.params;
-
-    console.log('📋 Fetching bookings with status:', status);
-
-    const bookings = await Booking.find({ status }).sort({ createdAt: -1 });
-
-    console.log(`✅ Found ${bookings.length} bookings with status: ${status}`);
-
-    res.status(200).json({
-      success: true,
-      bookings
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching bookings by status:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch bookings',
-      error: error.message
-    });
-  }
-});
-
-// ============================================================================
-// GET ACTIVE BOOKINGS FOR A PROPERTY
-// ============================================================================
-router.get('/property/:propertyId/active', async (req, res) => {
-  try {
-    const { propertyId } = req.params;
-
-    console.log('📋 Fetching active bookings for property:', propertyId);
-
-    const bookings = await Booking.find({
-      propertyId,
-      status: 'active'
-    }).sort({ createdAt: -1 });
-
-    console.log(`✅ Found ${bookings.length} active bookings`);
-
-    res.status(200).json({
-      success: true,
-      bookings
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching active bookings:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch active bookings',
-      error: error.message
-    });
-  }
-});
-
-// ============================================================================
-// GET BOOKING STATISTICS FOR OWNER
-// ============================================================================
-router.get('/owner/:ownerId/stats', async (req, res) => {
-  try {
-    const { ownerId } = req.params;
-
-    console.log('📊 Fetching booking statistics for owner:', ownerId);
-
-    const [totalBookings, activeBookings, pendingBookings, completedBookings, cancelledBookings] = await Promise.all([
-      Booking.countDocuments({ ownerId }),
-      Booking.countDocuments({ ownerId, status: 'active' }),
-      Booking.countDocuments({ ownerId, status: 'pending' }),
-      Booking.countDocuments({ ownerId, status: 'completed' }),
-      Booking.countDocuments({ ownerId, status: 'cancelled' })
-    ]);
-
-    const stats = {
-      totalBookings,
-      activeBookings,
-      pendingBookings,
-      completedBookings,
-      cancelledBookings
-    };
-
-    console.log('✅ Statistics calculated:', stats);
-
-    res.status(200).json({
-      success: true,
-      stats
-    });
-
-  } catch (error) {
-    console.error('❌ Error fetching booking statistics:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch booking statistics',
-      error: error.message
-    });
-  }
-});
-
-// ============================================================================
-// CANCEL BOOKING (TENANT)
-// ============================================================================
-router.post('/:bookingId/cancel', async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-    const { reason } = req.body;
-
-    console.log('🚫 Cancelling booking:', bookingId);
-    console.log('Reason:', reason);
-
-    const booking = await Booking.findById(bookingId);
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found'
-      });
-    }
-
-    if (booking.status === 'cancelled') {
-      return res.status(400).json({
-        success: false,
-        message: 'Booking is already cancelled'
-      });
-    }
-
-    booking.status = 'cancelled';
-    booking.cancellationReason = reason;
-    booking.cancelledAt = new Date();
-    booking.updatedAt = new Date();
-
-    await booking.save();
-
-    console.log('✅ Booking cancelled successfully');
-
-    res.status(200).json({
-      success: true,
-      message: 'Booking cancelled successfully',
-      booking
-    });
-
-  } catch (error) {
-    console.error('❌ Error cancelling booking:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to cancel booking',
-      error: error.message
-    });
-  }
-});
-
-// ============================================================================
-// ACCEPT BOOKING (OWNER)
-// ============================================================================
-router.post('/:bookingId/accept', async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-
-    console.log('✅ Accepting booking:', bookingId);
-
-    const booking = await Booking.findById(bookingId);
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found'
-      });
-    }
-
-    if (booking.status !== 'pending') {
-      return res.status(400).json({
-        success: false,
-        message: 'Only pending bookings can be accepted'
-      });
-    }
-
-    booking.status = 'active';
-    booking.acceptedAt = new Date();
-    booking.updatedAt = new Date();
-
-    await booking.save();
-
-    console.log('✅ Booking accepted successfully');
-
-    res.status(200).json({
-      success: true,
-      message: 'Booking accepted successfully',
-      booking
-    });
-
-  } catch (error) {
-    console.error('❌ Error accepting booking:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to accept booking',
-      error: error.message
-    });
-  }
-});
-
-// ============================================================================
-// REJECT BOOKING (OWNER)
-// ============================================================================
-router.post('/:bookingId/reject', async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-    const { reason } = req.body;
-
-    console.log('❌ Rejecting booking:', bookingId);
-    console.log('Reason:', reason);
-
-    const booking = await Booking.findById(bookingId);
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found'
-      });
-    }
-
-    if (booking.status !== 'pending') {
-      return res.status(400).json({
-        success: false,
-        message: 'Only pending bookings can be rejected'
-      });
-    }
-
-    booking.status = 'cancelled';
-    booking.rejectionReason = reason;
-    booking.rejectedAt = new Date();
-    booking.updatedAt = new Date();
-
-    await booking.save();
-
-    console.log('✅ Booking rejected successfully');
-
-    res.status(200).json({
-      success: true,
-      message: 'Booking rejected successfully',
-      booking
-    });
-
-  } catch (error) {
-    console.error('❌ Error rejecting booking:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to reject booking',
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
