@@ -1,11 +1,31 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 
 const Booking = require('../models/Booking');
 const Property = require('../models/Property');
+const User = require('../models/user'); // ✅ Fixed: uppercase 'U'
 
 // =======================================================
-// CREATE BOOKING - Multiple endpoints for compatibility
+// HELPER: Find tenant by email and return ObjectId
+// =======================================================
+async function getTenantIdByEmail(email) {
+  try {
+    if (!email) return null;
+    
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (user && user._id) {
+      return user._id;
+    }
+    return null;
+  } catch (error) {
+    console.error('Error finding tenant by email:', error);
+    return null;
+  }
+}
+
+// =======================================================
+// CREATE BOOKING
 // =======================================================
 const createBookingHandler = async (req, res) => {
   try {
@@ -26,6 +46,14 @@ const createBookingHandler = async (req, res) => {
       notes
     } = req.body;
 
+    console.log('📥 Create booking request:', {
+      propertyId,
+      tenantId,
+      tenantEmail,
+      tenantName
+    });
+
+    // ✅ Validate required fields
     if (!propertyId || !tenantEmail || !orderId || !paymentId) {
       return res.status(400).json({
         success: false,
@@ -33,6 +61,7 @@ const createBookingHandler = async (req, res) => {
       });
     }
 
+    // ✅ Verify property exists
     const property = await Property.findById(propertyId);
     if (!property) {
       return res.status(404).json({
@@ -41,10 +70,10 @@ const createBookingHandler = async (req, res) => {
       });
     }
 
-    // Prevent duplicate active booking
+    // ✅ Check for duplicate active booking
     const existing = await Booking.findOne({
       propertyId,
-      tenantEmail,
+      tenantEmail: tenantEmail.toLowerCase(),
       status: { $in: ['pending', 'active'] }
     });
 
@@ -55,18 +84,29 @@ const createBookingHandler = async (req, res) => {
       });
     }
 
-    // Dates
+    // ✅ Resolve tenantId from email if not provided
+    let properTenantId = null;
+    if (tenantId && mongoose.Types.ObjectId.isValid(tenantId)) {
+      properTenantId = tenantId;
+    } else if (tenantEmail) {
+      properTenantId = await getTenantIdByEmail(tenantEmail);
+    }
+
+    console.log('✅ Resolved tenantId:', properTenantId);
+
+    // ✅ Calculate dates
     const moveIn = moveInDate ? new Date(moveInDate) : new Date();
     const dueDate = new Date(moveIn);
     dueDate.setMonth(dueDate.getMonth() + Number(leaseDuration || 1));
 
+    // ✅ Create booking
     const booking = await Booking.create({
       propertyId,
       ownerId: property.ownerId,
-      tenantId: tenantId || null,
+      tenantId: properTenantId,
 
       tenantName,
-      tenantEmail,
+      tenantEmail: tenantEmail.toLowerCase(),
       tenantPhone,
 
       propertyTitle: property.title,
@@ -86,8 +126,13 @@ const createBookingHandler = async (req, res) => {
 
       rentDueDate: dueDate,
       lastRentPayment: new Date(),
-      status: 'active'
+      status: 'active',
+      
+      // ✅ Initialize empty documents Map
+      tenantDocuments: new Map()
     });
+
+    console.log('✅ Booking created:', booking._id);
 
     res.status(201).json({
       success: true,
@@ -105,15 +150,19 @@ const createBookingHandler = async (req, res) => {
   }
 };
 
-// ✅ Both endpoints work
 router.post('/', createBookingHandler);
 router.post('/create', createBookingHandler);
 
 // =======================================================
-// UPDATE BOOKING - Support multiple HTTP methods
+// UPDATE BOOKING - WITH MAP DOCUMENT HANDLING
 // =======================================================
 const updateBookingHandler = async (req, res) => {
   try {
+    console.log('📥 Update booking request:', {
+      bookingId: req.params.id,
+      body: req.body
+    });
+
     const booking = await Booking.findById(req.params.id);
     if (!booking) {
       return res.status(404).json({
@@ -122,20 +171,44 @@ const updateBookingHandler = async (req, res) => {
       });
     }
 
-    // ✅ Document-safe update
+    // ✅ Handle tenant documents separately (Map type)
     if (req.body.tenantDocuments) {
-      await booking.updateDocuments(req.body.tenantDocuments);
+      console.log('📄 Updating documents:', req.body.tenantDocuments);
+      
+      try {
+        // Use the model's updateDocuments method for safe Map handling
+        await booking.updateDocuments(req.body.tenantDocuments);
+        console.log('✅ Documents updated successfully');
+      } catch (docError) {
+        console.error('❌ Error updating documents:', docError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to update documents',
+          error: docError.message
+        });
+      }
     }
 
-    // ✅ Update other fields (but skip sensitive ones)
+    // ✅ Update other fields (exclude protected fields)
+    const protectedFields = [
+      'tenantDocuments', // Already handled above
+      '_id',
+      'tenantId',        // Never update from request
+      'ownerId',         // Never update from request
+      'propertyId',      // Never update from request
+      'createdAt'        // Mongoose handles this
+    ];
+
     Object.keys(req.body).forEach((key) => {
-      if (key !== 'tenantDocuments' && key !== '_id' && key !== 'tenantId') {
+      if (!protectedFields.includes(key)) {
         booking[key] = req.body[key];
       }
     });
 
     booking.updatedAt = new Date();
     await booking.save();
+
+    console.log('✅ Booking updated successfully:', booking._id);
 
     res.json({
       success: true,
@@ -145,14 +218,14 @@ const updateBookingHandler = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Update booking error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update booking',
+      error: error.message
     });
   }
 };
 
-// ✅ Support PUT, PATCH, and POST for updates
 router.put('/:id', updateBookingHandler);
 router.patch('/:id', updateBookingHandler);
 router.post('/:id', updateBookingHandler);
@@ -209,7 +282,7 @@ router.post('/:id/rent', async (req, res) => {
 router.get('/tenant/:email', async (req, res) => {
   try {
     const bookings = await Booking.find({
-      tenantEmail: req.params.email
+      tenantEmail: req.params.email.toLowerCase()
     }).sort({ createdAt: -1 });
 
     res.json({ success: true, bookings });
@@ -257,7 +330,7 @@ router.get('/:id', async (req, res) => {
 router.put('/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
-    const allowed = ['pending', 'active', 'completed', 'cancelled'];
+    const allowed = ['pending', 'active', 'overdue', 'terminated'];
 
     if (!allowed.includes(status)) {
       return res.status(400).json({
