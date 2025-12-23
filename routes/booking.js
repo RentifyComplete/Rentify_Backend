@@ -5,9 +5,9 @@ const Booking = require('../models/Booking');
 const Property = require('../models/Property');
 
 // =======================================================
-// CREATE BOOKING  (POST /api/bookings)
+// CREATE BOOKING - Multiple endpoints for compatibility
 // =======================================================
-router.post('/', async (req, res) => {
+const createBookingHandler = async (req, res) => {
   try {
     const {
       propertyId,
@@ -72,7 +72,6 @@ router.post('/', async (req, res) => {
       propertyTitle: property.title,
       propertyAddress: property.address || property.location,
 
-      // ✅ FIX: nullish coalescing (prevents 0 / 1 bugs)
       monthlyRent: Number(monthlyRent ?? property.price),
       securityDeposit: Number(securityDeposit ?? 0),
       convenienceFee: Number(convenienceFee ?? 0),
@@ -104,12 +103,62 @@ router.post('/', async (req, res) => {
       error: error.message
     });
   }
-});
+};
 
+// ✅ Both endpoints work
+router.post('/', createBookingHandler);
+router.post('/create', createBookingHandler);
+
+// =======================================================
+// UPDATE BOOKING - Support multiple HTTP methods
+// =======================================================
+const updateBookingHandler = async (req, res) => {
+  try {
+    const booking = await Booking.findById(req.params.id);
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+
+    // ✅ Document-safe update
+    if (req.body.tenantDocuments) {
+      await booking.updateDocuments(req.body.tenantDocuments);
+    }
+
+    // ✅ Update other fields (but skip sensitive ones)
+    Object.keys(req.body).forEach((key) => {
+      if (key !== 'tenantDocuments' && key !== '_id' && key !== 'tenantId') {
+        booking[key] = req.body[key];
+      }
+    });
+
+    booking.updatedAt = new Date();
+    await booking.save();
+
+    res.json({
+      success: true,
+      message: 'Booking updated successfully',
+      booking
+    });
+
+  } catch (error) {
+    console.error('❌ Update booking error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+};
+
+// ✅ Support PUT, PATCH, and POST for updates
+router.put('/:id', updateBookingHandler);
+router.patch('/:id', updateBookingHandler);
+router.post('/:id', updateBookingHandler);
 
 // =======================================================
 // RECORD RENT PAYMENT
-// POST /api/bookings/:id/rent
 // =======================================================
 router.post('/:id/rent', async (req, res) => {
   try {
@@ -154,7 +203,6 @@ router.post('/:id/rent', async (req, res) => {
   }
 });
 
-
 // =======================================================
 // GET BOOKINGS FOR TENANT
 // =======================================================
@@ -170,7 +218,6 @@ router.get('/tenant/:email', async (req, res) => {
   }
 });
 
-
 // =======================================================
 // GET BOOKINGS FOR OWNER
 // =======================================================
@@ -185,7 +232,6 @@ router.get('/owner/:ownerId', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 // =======================================================
 // GET SINGLE BOOKING
@@ -204,47 +250,6 @@ router.get('/:id', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
-
-// =======================================================
-// UPDATE BOOKING (DOCUMENT SAFE)
-// =======================================================
-router.put('/:id', async (req, res) => {
-  try {
-    const booking = await Booking.findById(req.params.id);
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found'
-      });
-    }
-
-    // ✅ Document-safe update
-    if (req.body.tenantDocuments) {
-      await booking.updateDocuments(req.body.tenantDocuments);
-    }
-
-    Object.keys(req.body).forEach((key) => {
-      if (key !== 'tenantDocuments') {
-        booking[key] = req.body[key];
-      }
-    });
-
-    booking.updatedAt = new Date();
-    await booking.save();
-
-    res.json({
-      success: true,
-      message: 'Booking updated successfully',
-      booking
-    });
-
-  } catch (error) {
-    console.error('❌ Update booking error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
 
 // =======================================================
 // UPDATE STATUS
@@ -277,7 +282,6 @@ router.put('/:id/status', async (req, res) => {
   }
 });
 
-
 // =======================================================
 // DELETE SINGLE BOOKING
 // =======================================================
@@ -292,7 +296,6 @@ router.delete('/:id', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 // =======================================================
 // CASCADE DELETE (PROPERTY)
