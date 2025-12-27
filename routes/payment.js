@@ -1187,11 +1187,50 @@ router.post('/create-order', async (req, res) => {
 
 router.post('/verify-payment', async (req, res) => {
   try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, propertyData } = req.body;
     const sign = razorpay_order_id + '|' + razorpay_payment_id;
     const expectedSign = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(sign.toString()).digest('hex');
     
     if (razorpay_signature === expectedSign) {
+      // ⭐ Fetch payment details from Razorpay
+      const payment = await razorpay.payments.fetch(razorpay_payment_id);
+      
+      console.log('✅ Initial property payment verified');
+      console.log('💰 Amount:', payment.amount / 100);
+      console.log('📋 Property Data:', propertyData);
+      
+      // ⭐ Save payment record as 'property_addition' for first month free logic
+      if (propertyData && propertyData.propertyId && propertyData.ownerId) {
+        try {
+          const property = await Property.findById(propertyData.propertyId);
+          
+          if (property) {
+            // Add to property's payment history as 'property_addition'
+            if (!property.servicePaymentHistory) {
+              property.servicePaymentHistory = [];
+            }
+            
+            property.servicePaymentHistory.push({
+              amount: payment.amount / 100,
+              monthsPaid: 1, // First month free
+              paymentId: razorpay_payment_id,
+              orderId: razorpay_order_id,
+              paymentType: 'property_addition', // ⭐ KEY FIELD for first month free
+              status: 'completed',
+              paidAt: new Date(),
+            });
+            
+            await property.save();
+            
+            console.log('✅ Payment saved as property_addition');
+            console.log('🎁 First month will be FREE for this property');
+          }
+        } catch (saveError) {
+          console.error('⚠️ Could not save payment history:', saveError.message);
+          // Still return success since payment was verified
+        }
+      }
+      
       res.json({ success: true, paymentId: razorpay_payment_id, verified: true });
     } else {
       res.status(400).json({ success: false, message: 'Invalid signature' });
