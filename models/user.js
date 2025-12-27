@@ -85,6 +85,7 @@ const userSchema = new mongoose.Schema({
   },
 
   // ⭐ Razorpay Integration Fields
+  // ⭐ Razorpay Integration Fields
   razorpayContactId: {
     type: String,
     trim: true
@@ -93,6 +94,34 @@ const userSchema = new mongoose.Schema({
   razorpayFundAccountId: {
     type: String,
     trim: true
+  },
+
+  // ⭐ NEW: Temporary payment storage for property addition
+  // This stores the payment temporarily until property is created
+  tempPropertyPayment: {
+    amount: {
+      type: Number
+    },
+    paymentId: {
+      type: String
+    },
+    orderId: {
+      type: String
+    },
+    paymentType: {
+      type: String,
+      default: 'property_addition'
+    },
+    status: {
+      type: String,
+      default: 'completed'
+    },
+    paidAt: {
+      type: Date
+    },
+    expiresAt: {
+      type: Date
+    }
   },
 
   // Account status
