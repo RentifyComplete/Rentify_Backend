@@ -183,6 +183,7 @@ router.post('/', upload.array('images', 10), async (req, res) => {
     }
 
     // Create property
+    // Create property
     const property = new Property({
       title,
       location,
@@ -208,13 +209,51 @@ router.post('/', upload.array('images', 10), async (req, res) => {
     property.lastServicePayment = now;
     property.monthlyServiceCharge = property.calculateServiceCharge();
 
+    // ⭐ NEW: Link the initial payment from temporary storage
+    try {
+      const owner = await User.findById(ownerId);
+      if (owner && owner.tempPropertyPayment) {
+        const tempPayment = owner.tempPropertyPayment;
+        
+        // Check if payment hasn't expired (10 minutes)
+        if (new Date() < tempPayment.expiresAt) {
+          console.log('🔗 Linking initial payment to property');
+          
+          // Add payment to property's history
+          property.servicePaymentHistory = [{
+            amount: tempPayment.amount,
+            monthsPaid: 1,
+            paymentId: tempPayment.paymentId,
+            orderId: tempPayment.orderId,
+            paymentType: 'property_addition', // ⭐ KEY: This enables first month free
+            status: 'completed',
+            paidAt: tempPayment.paidAt,
+          }];
+          
+          // Clear temporary payment
+          await User.findByIdAndUpdate(ownerId, {
+            $unset: { tempPropertyPayment: 1 }
+          });
+          
+          console.log('✅ Initial payment linked successfully');
+          console.log('🎁 First month FREE activated');
+        } else {
+          console.log('⚠️ Temporary payment expired');
+        }
+      } else {
+        console.log('⚠️ No temporary payment found for owner');
+      }
+    } catch (linkError) {
+      console.error('⚠️ Error linking payment:', linkError.message);
+      // Continue anyway - property creation shouldn't fail
+    }
+
     console.log('💰 Service charge setup:');
     console.log('  Monthly charge: ₹' + property.monthlyServiceCharge);
     console.log('  Due date: ' + property.serviceDueDate.toISOString());
     console.log('  Status: ' + property.serviceStatus);
 
     const savedProperty = await property.save();
-
     console.log('✅ Property created successfully with ID:', savedProperty._id);
 
     res.status(201).json({
