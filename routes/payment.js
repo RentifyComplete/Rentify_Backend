@@ -1192,42 +1192,32 @@ router.post('/verify-payment', async (req, res) => {
     const expectedSign = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(sign.toString()).digest('hex');
     
     if (razorpay_signature === expectedSign) {
-      // ⭐ Fetch payment details from Razorpay
-      const payment = await razorpay.payments.fetch(razorpay_payment_id);
+      console.log('✅ Payment verified for property addition');
+      console.log('💰 Property Data:', propertyData);
       
-      console.log('✅ Initial property payment verified');
-      console.log('💰 Amount:', payment.amount / 100);
-      console.log('📋 Property Data:', propertyData);
-      
-      // ⭐ Save payment record as 'property_addition' for first month free logic
-      if (propertyData && propertyData.propertyId && propertyData.ownerId) {
+      // ⭐ Store payment info in user's temporary field for linking after property upload
+      if (propertyData && propertyData.ownerId) {
         try {
-          const property = await Property.findById(propertyData.propertyId);
+          const payment = await razorpay.payments.fetch(razorpay_payment_id);
           
-          if (property) {
-            // Add to property's payment history as 'property_addition'
-            if (!property.servicePaymentHistory) {
-              property.servicePaymentHistory = [];
+          // Save to owner's temporary payment data
+          await User.findByIdAndUpdate(propertyData.ownerId, {
+            $set: {
+              'tempPropertyPayment': {
+                amount: payment.amount / 100,
+                paymentId: razorpay_payment_id,
+                orderId: razorpay_order_id,
+                paymentType: 'property_addition',
+                status: 'completed',
+                paidAt: new Date(),
+                expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+              }
             }
-            
-            property.servicePaymentHistory.push({
-              amount: payment.amount / 100,
-              monthsPaid: 1, // First month free
-              paymentId: razorpay_payment_id,
-              orderId: razorpay_order_id,
-              paymentType: 'property_addition', // ⭐ KEY FIELD for first month free
-              status: 'completed',
-              paidAt: new Date(),
-            });
-            
-            await property.save();
-            
-            console.log('✅ Payment saved as property_addition');
-            console.log('🎁 First month will be FREE for this property');
-          }
+          });
+          
+          console.log('💾 Payment saved temporarily for owner');
         } catch (saveError) {
-          console.error('⚠️ Could not save payment history:', saveError.message);
-          // Still return success since payment was verified
+          console.error('⚠️ Could not save temporary payment:', saveError.message);
         }
       }
       
@@ -1239,7 +1229,6 @@ router.post('/verify-payment', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
 router.get('/test-razorpay', async (req, res) => {
   try {
     const testOrder = await razorpay.orders.create({
