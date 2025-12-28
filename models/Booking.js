@@ -56,7 +56,19 @@ const bookingSchema = new mongoose.Schema(
       default: '',
       trim: true
     },
+    
+    // ⭐ ADD THESE TWO FIELDS
+    roomNumber: {
+      type: String,
+      default: null,
+      trim: true
+    },
 
+    occupancyType: {
+      type: String,
+      default: 'Single',
+      trim: true
+    },
     // -------------------- Financials --------------------
     monthlyRent: {
       type: Number,
