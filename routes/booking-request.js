@@ -25,6 +25,8 @@ const bookingRequestSchema = new mongoose.Schema({
   moveInDate: { type: Date, required: true },
   leaseDuration: { type: Number, required: true }, // in months
   notes: { type: String, default: '' },
+  occupancyType: { type: String, default: 'Single' }, // ⭐ NEW: Single, Double, Triple, etc.
+  roomNumber: { type: String, default: null }, // ⭐ NEW: Assigned by owner on approval
   
   // Request status
   status: { 
@@ -61,6 +63,7 @@ router.post('/create', async (req, res) => {
       moveInDate,
       leaseDuration,
       notes,
+      occupancyType, // ⭐ NEW
     } = req.body;
 
     console.log('📝 Creating booking request for property:', propertyId);
@@ -108,6 +111,7 @@ router.post('/create', async (req, res) => {
       moveInDate,
       leaseDuration,
       notes: notes || '',
+      occupancyType: occupancyType || 'Single', // ⭐ NEW: Default to 'Single' if not provided
       status: 'pending',
     });
 
@@ -236,6 +240,7 @@ router.get('/tenant/:tenantEmail', async (req, res) => {
 router.put('/:requestId/approve', async (req, res) => {
   try {
     const { requestId } = req.params;
+    const { roomNumber } = req.body; // ⭐ NEW: Get roomNumber from request body
 
     console.log('✅ Approving booking request:', requestId);
 
@@ -243,6 +248,7 @@ router.put('/:requestId/approve', async (req, res) => {
       requestId,
       {
         status: 'approved',
+        roomNumber: roomNumber, // ⭐ NEW: Assign room number on approval
         respondedAt: new Date(),
         updatedAt: new Date(),
       },
