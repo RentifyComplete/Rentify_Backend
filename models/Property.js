@@ -1,10 +1,9 @@
 // ========================================
-// FINAL PROPERTY MODEL - COMPLETE & FIXED
+// FIXED PROPERTY MODEL - WITH ROOMS FIELD
 // File: models/Property.js
+// ✅ Added 'rooms' field for PG properties
 // ✅ Monthly service charge tracking
 // ✅ Payment history with proper validation
-// ✅ Auto-deactivation after grace period
-// ✅ Fixed recordPayment method
 // ========================================
 
 const mongoose = require('mongoose');
@@ -49,6 +48,7 @@ const propertySchema = new mongoose.Schema(
     type: { type: String, required: true },
     bhk: String,
     beds: Number,
+    rooms: Number, // ⭐ ADDED: For PG room count
     amenities: [String],
     description: { type: String, required: true },
     address: String,
@@ -65,7 +65,6 @@ const propertySchema = new mongoose.Schema(
     serviceDueDate: { 
       type: Date, 
       default: function() {
-        // Default: 30 days from property creation (first payment = 1 month)
         return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
       }
     },
@@ -76,17 +75,17 @@ const propertySchema = new mongoose.Schema(
     },
     lastServicePayment: { 
       type: Date,
-      default: Date.now // Set to now when property is created
+      default: Date.now
     },
     monthlyServiceCharge: {
       type: Number,
       required: true,
-      default: 18 // Base charge per bed/bhk
+      default: 18
     },
-    servicePaymentHistory: [paymentHistorySchema], // ⭐ Use explicit schema
+    servicePaymentHistory: [paymentHistorySchema],
     gracePeriodEndsAt: { 
       type: Date,
-      default: null // Set when payment becomes overdue
+      default: null
     },
     autoRenewal: { 
       type: Boolean, 
@@ -114,7 +113,12 @@ propertySchema.methods.calculateServiceCharge = function() {
   let charge = RATE_PER_UNIT;
   
   if (this.type === 'PG') {
-    charge = (this.beds || 1) * RATE_PER_UNIT;
+    // ⭐ FIXED: Prioritize 'rooms' over 'beds' for PG
+    if (this.rooms) {
+      charge = this.rooms * RATE_PER_UNIT;
+    } else if (this.beds) {
+      charge = this.beds * RATE_PER_UNIT;
+    }
   } else if (this.type === 'Flat' || this.type === 'Apartment') {
     if (this.bhk) {
       const match = this.bhk.match(/(\d+)/);
@@ -141,24 +145,22 @@ propertySchema.methods.getPaymentStatus = function() {
   if (daysUntilDue > 15) {
     return 'active';
   } else if (daysUntilDue > 0) {
-    return 'due'; // Payment due soon (within 15 days)
+    return 'due';
   } else if (daysUntilDue >= -10) {
-    return 'overdue'; // Within 10-day grace period
+    return 'overdue';
   } else {
-    return 'suspended'; // Grace period ended
+    return 'suspended';
   }
 };
 
-// ⭐ METHOD: Update payment and extend service date - FIXED VERSION
+// ⭐ METHOD: Update payment and extend service date
 propertySchema.methods.recordPayment = async function(paymentData) {
   console.log('🔍 recordPayment called with:', JSON.stringify(paymentData, null, 2));
   
-  // Validate required fields
   if (!paymentData.amount || !paymentData.monthsPaid) {
     throw new Error(`Missing required fields: amount=${paymentData.amount}, monthsPaid=${paymentData.monthsPaid}`);
   }
   
-  // Explicitly extract and validate fields
   const amount = Number(paymentData.amount);
   const monthsPaid = Number(paymentData.monthsPaid);
   const paymentId = String(paymentData.paymentId || '');
@@ -171,14 +173,10 @@ propertySchema.methods.recordPayment = async function(paymentData) {
     throw new Error(`Invalid payment data: amount=${amount}, monthsPaid=${monthsPaid}`);
   }
   
-  // Calculate new due date
   const currentDueDate = this.serviceDueDate || new Date();
   const now = new Date();
-  
-  // ⭐ If current due date is in the past, start from now
   const baseDate = currentDueDate > now ? currentDueDate : now;
   
-  // ⭐ CRITICAL FIX: Use exact month calculation to avoid date issues
   const newDueDate = new Date(
     baseDate.getFullYear(),
     baseDate.getMonth() + monthsPaid,
@@ -191,10 +189,8 @@ propertySchema.methods.recordPayment = async function(paymentData) {
   console.log('📅 Base date:', baseDate);
   console.log('📅 New due date:', newDueDate);
   
-  // Calculate valid until date
   const validUntil = new Date(newDueDate);
   
-  // Create payment history entry with explicit field assignment
   const paymentEntry = {
     amount: amount,
     monthsPaid: monthsPaid,
@@ -207,10 +203,8 @@ propertySchema.methods.recordPayment = async function(paymentData) {
   
   console.log('💾 Payment entry to save:', JSON.stringify(paymentEntry, null, 2));
   
-  // Add to payment history
   this.servicePaymentHistory.push(paymentEntry);
   
-  // Update property fields
   this.serviceDueDate = newDueDate;
   this.serviceStatus = 'active';
   this.lastServicePayment = new Date();
@@ -220,10 +214,7 @@ propertySchema.methods.recordPayment = async function(paymentData) {
   this.suspensionReason = null;
   
   console.log('✅ Property updated, saving...');
-  console.log('📊 Payment history length:', this.servicePaymentHistory.length);
-  console.log('📊 Last entry:', JSON.stringify(this.servicePaymentHistory[this.servicePaymentHistory.length - 1], null, 2));
   
-  // Save and return
   const saved = await this.save();
   
   console.log('✅ Property saved successfully');
@@ -236,11 +227,9 @@ propertySchema.methods.recordPayment = async function(paymentData) {
 // STATIC METHODS
 // ========================================
 
-// ⭐ STATIC METHOD: Find properties that need status update
 propertySchema.statics.findPropertiesNeedingUpdate = async function() {
   const now = new Date();
   
-  // Find properties where due date has passed
   const properties = await this.find({
     serviceDueDate: { $lt: now },
     serviceStatus: { $ne: 'suspended' }
@@ -249,11 +238,10 @@ propertySchema.statics.findPropertiesNeedingUpdate = async function() {
   return properties;
 };
 
-// ⭐ STATIC METHOD: Auto-suspend overdue properties
 propertySchema.statics.suspendOverdueProperties = async function() {
   const now = new Date();
   const gracePeriodEnd = new Date(now);
-  gracePeriodEnd.setDate(gracePeriodEnd.getDate() - 10); // 10 days ago
+  gracePeriodEnd.setDate(gracePeriodEnd.getDate() - 10);
   
   const result = await this.updateMany(
     {
@@ -276,13 +264,11 @@ propertySchema.statics.suspendOverdueProperties = async function() {
   return result;
 };
 
-// ⭐ STATIC METHOD: Update all property statuses (for cron job)
 propertySchema.statics.updateAllStatuses = async function() {
   console.log('🔄 Updating all property statuses...');
   
   const now = new Date();
   
-  // Update 'active' properties that are now 'due'
   await this.updateMany(
     {
       serviceDueDate: { 
@@ -294,7 +280,6 @@ propertySchema.statics.updateAllStatuses = async function() {
     { $set: { serviceStatus: 'due' } }
   );
   
-  // Update 'due' properties that are now 'overdue'
   await this.updateMany(
     {
       serviceDueDate: { $lt: now },
@@ -303,7 +288,6 @@ propertySchema.statics.updateAllStatuses = async function() {
     { $set: { serviceStatus: 'overdue' } }
   );
   
-  // Suspend properties past grace period
   await this.suspendOverdueProperties();
   
   console.log('✅ All property statuses updated');

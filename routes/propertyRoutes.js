@@ -1,14 +1,15 @@
 // ========================================
-// FINAL PROPERTY ROUTES - WITH SERVICE CHARGE SETUP
+// FIXED PROPERTY ROUTES - WITH ROOMS FIELD
+// File: routes/properties.js
+// ✅ Added 'rooms' field handling
 // ✅ Sets serviceDueDate on property creation
 // ✅ Calculates initial service charge
-// ✅ Includes all existing functionality
 // ========================================
 
 const express = require('express');
 const router = express.Router();
 const Property = require('../models/Property');
-const User = require('../models/user'); // ⭐ ADD THIS IMPORT
+const User = require('../models/user');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const fs = require('fs');
@@ -24,7 +25,7 @@ cloudinary.config({
 // Multer configuration with validation
 const upload = multer({
   dest: 'uploads/',
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const filetypes = /jpeg|jpg|png|webp/;
     const mimetype = filetypes.test(file.mimetype);
@@ -47,7 +48,7 @@ async function uploadToCloudinary(filePath) {
         { quality: 'auto' },
       ],
     });
-    fs.unlinkSync(filePath); // Delete local file after upload
+    fs.unlinkSync(filePath);
     return result.secure_url;
   } catch (error) {
     console.error('❌ Cloudinary upload error:', error);
@@ -69,7 +70,6 @@ router.get('/', async (req, res) => {
       limit = 20,
     } = req.query;
 
-    // Build filter object - only show active properties
     const filter = { isActive: true };
 
     if (city) filter.city = new RegExp(city, 'i');
@@ -144,6 +144,7 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       type,
       bhk,
       beds,
+      rooms, // ⭐ ADDED: Accept rooms field
       amenities,
       description,
       address,
@@ -156,6 +157,8 @@ router.post('/', upload.array('images', 10), async (req, res) => {
     console.log('📝 Creating new property...');
     console.log('  Title:', title);
     console.log('  Type:', type);
+    console.log('  Beds:', beds);
+    console.log('  Rooms:', rooms); // ⭐ ADDED: Log rooms
     console.log('  Owner ID:', ownerId);
 
     // Validate required fields
@@ -176,13 +179,11 @@ router.post('/', upload.array('images', 10), async (req, res) => {
           imageUrls.push(url);
         } catch (uploadError) {
           console.error('Failed to upload image:', uploadError);
-          // Continue with other images even if one fails
         }
       }
       console.log(`✅ Uploaded ${imageUrls.length} images`);
     }
 
-    // Create property
     // Create property
     const property = new Property({
       title,
@@ -191,6 +192,7 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       type,
       bhk,
       beds: beds ? parseInt(beds) : undefined,
+      rooms: rooms ? parseInt(rooms) : undefined, // ⭐ ADDED: Handle rooms field
       amenities: typeof amenities === 'string' ? JSON.parse(amenities) : amenities,
       description,
       address,
@@ -201,36 +203,32 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       images: imageUrls,
     });
 
-    // ⭐ NEW: Set up service charge subscription
-    // First payment already done, so give 30 days free
+    // ⭐ Set up service charge subscription
     const now = new Date();
-    property.serviceDueDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days from now
+    property.serviceDueDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
     property.serviceStatus = 'active';
     property.lastServicePayment = now;
     property.monthlyServiceCharge = property.calculateServiceCharge();
 
-    // ⭐ NEW: Link the initial payment from temporary storage
+    // ⭐ Link the initial payment from temporary storage
     try {
       const owner = await User.findById(ownerId);
       if (owner && owner.tempPropertyPayment) {
         const tempPayment = owner.tempPropertyPayment;
         
-        // Check if payment hasn't expired (10 minutes)
         if (new Date() < tempPayment.expiresAt) {
           console.log('🔗 Linking initial payment to property');
           
-          // Add payment to property's history
           property.servicePaymentHistory = [{
             amount: tempPayment.amount,
             monthsPaid: 1,
             paymentId: tempPayment.paymentId,
             orderId: tempPayment.orderId,
-            paymentType: 'property_addition', // ⭐ KEY: This enables first month free
+            paymentType: 'property_addition',
             status: 'completed',
             paidAt: tempPayment.paidAt,
           }];
           
-          // Clear temporary payment
           await User.findByIdAndUpdate(ownerId, {
             $unset: { tempPropertyPayment: 1 }
           });
@@ -240,18 +238,16 @@ router.post('/', upload.array('images', 10), async (req, res) => {
         } else {
           console.log('⚠️ Temporary payment expired');
         }
-      } else {
-        console.log('⚠️ No temporary payment found for owner');
       }
     } catch (linkError) {
       console.error('⚠️ Error linking payment:', linkError.message);
-      // Continue anyway - property creation shouldn't fail
     }
 
     console.log('💰 Service charge setup:');
     console.log('  Monthly charge: ₹' + property.monthlyServiceCharge);
     console.log('  Due date: ' + property.serviceDueDate.toISOString());
     console.log('  Status: ' + property.serviceStatus);
+    if (rooms) console.log('  Rooms: ' + rooms); // ⭐ ADDED
 
     const savedProperty = await property.save();
     console.log('✅ Property created successfully with ID:', savedProperty._id);
@@ -271,7 +267,6 @@ router.post('/', upload.array('images', 10), async (req, res) => {
   } catch (error) {
     console.error('❌ Error creating property:', error);
 
-    // Cleanup uploaded files on error
     if (req.files) {
       req.files.forEach((file) => {
         if (fs.existsSync(file.path)) {
@@ -300,7 +295,6 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
       });
     }
 
-    // Update fields
     const {
       title,
       location,
@@ -308,6 +302,7 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
       type,
       bhk,
       beds,
+      rooms, // ⭐ ADDED: Accept rooms in updates
       amenities,
       description,
       address,
@@ -322,6 +317,7 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
     if (type) property.type = type;
     if (bhk) property.bhk = bhk;
     if (beds) property.beds = parseInt(beds);
+    if (rooms) property.rooms = parseInt(rooms); // ⭐ ADDED
     if (amenities) property.amenities = typeof amenities === 'string' ? JSON.parse(amenities) : amenities;
     if (description) property.description = description;
     if (address) property.address = address;
@@ -329,8 +325,8 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
     if (state) property.state = state;
     if (zipCode) property.zipCode = zipCode;
 
-    // ⭐ NEW: Recalculate service charge if type/beds/bhk changed
-    if (type || bhk || beds) {
+    // ⭐ Recalculate service charge if type/beds/bhk/rooms changed
+    if (type || bhk || beds || rooms) {
       const oldCharge = property.monthlyServiceCharge;
       property.monthlyServiceCharge = property.calculateServiceCharge();
       
@@ -339,7 +335,6 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
       }
     }
 
-    // Upload new images if provided
     if (req.files && req.files.length > 0) {
       const newImageUrls = [];
       for (const file of req.files) {
@@ -363,7 +358,6 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
   } catch (error) {
     console.error('❌ Error updating property:', error);
 
-    // Cleanup uploaded files on error
     if (req.files) {
       req.files.forEach((file) => {
         if (fs.existsSync(file.path)) {
@@ -392,7 +386,6 @@ router.delete('/:id', async (req, res) => {
       });
     }
 
-    // Soft delete (set isActive to false) instead of hard delete
     property.isActive = false;
     property.serviceStatus = 'suspended';
     property.suspendedAt = new Date();
@@ -400,9 +393,6 @@ router.delete('/:id', async (req, res) => {
     await property.save();
 
     console.log(`🗑️  Property soft-deleted: ${property._id}`);
-
-    // Or use hard delete:
-    // await Property.findByIdAndDelete(req.params.id);
 
     res.status(200).json({
       success: true,
@@ -423,7 +413,6 @@ router.get('/owner/:ownerId', async (req, res) => {
   try {
     console.log('🔍 Fetching properties for owner:', req.params.ownerId);
     
-    // ⭐ UPDATED: Return ALL properties (including suspended) so owner can see payment status
     const properties = await Property.find({
       ownerId: req.params.ownerId,
     }).sort({ createdAt: -1 });
@@ -433,7 +422,7 @@ router.get('/owner/:ownerId', async (req, res) => {
     res.status(200).json({
       success: true,
       count: properties.length,
-      properties: properties, // ⭐ Changed from 'data' to 'properties' for consistency
+      data: properties, // ⭐ Changed back to 'data' for consistency with Flutter service
     });
   } catch (error) {
     console.error('❌ Error fetching owner properties:', error);
