@@ -27,6 +27,12 @@ async function getTenantIdByEmail(email) {
 // =======================================================
 // CREATE BOOKING
 // =======================================================
+// ============================================================
+// QUICK FIX: Add these lines to your existing routes/bookings.js
+// ============================================================
+
+// Find your createBookingHandler function and update it like this:
+
 const createBookingHandler = async (req, res) => {
   try {
     const {
@@ -43,15 +49,44 @@ const createBookingHandler = async (req, res) => {
       leaseDuration,
       orderId,
       paymentId,
-      notes
+      notes,
+      requestId // ⭐ ADD THIS: Flutter will send the approved request ID
     } = req.body;
 
     console.log('📥 Create booking request:', {
       propertyId,
       tenantId,
       tenantEmail,
-      tenantName
+      tenantName,
+      requestId // ⭐ LOG THIS
     });
+
+    // ⭐⭐⭐ ADD THIS SECTION - Fetch room info from approved request ⭐⭐⭐
+    let roomNumber = null;
+    let occupancyType = 'Single';
+
+    if (requestId) {
+      console.log('🔍 Fetching room info from booking request:', requestId);
+      try {
+        const BookingRequest = mongoose.model('BookingRequest');
+        const bookingRequest = await BookingRequest.findById(requestId);
+        
+        if (bookingRequest) {
+          roomNumber = bookingRequest.roomNumber;
+          occupancyType = bookingRequest.occupancyType || 'Single';
+          console.log('✅ Room info fetched from request:');
+          console.log('   🚪 Room Number:', roomNumber);
+          console.log('   👥 Occupancy Type:', occupancyType);
+        } else {
+          console.log('⚠️ Booking request not found');
+        }
+      } catch (err) {
+        console.error('❌ Error fetching booking request:', err);
+      }
+    } else {
+      console.log('⚠️ No requestId provided, room fields will be null');
+    }
+    // ⭐⭐⭐ END OF NEW SECTION ⭐⭐⭐
 
     // ✅ Validate required fields
     if (!propertyId || !tenantEmail || !orderId || !paymentId) {
@@ -99,11 +134,11 @@ const createBookingHandler = async (req, res) => {
     const dueDate = new Date(moveIn);
     dueDate.setMonth(dueDate.getMonth() + Number(leaseDuration || 1));
 
-    // ✅ Create booking
+    // ✅ Create booking WITH room fields
     const booking = await Booking.create({
       propertyId,
       ownerId: property.ownerId,
-      tenantId: properTenantId, // ✅ Now properly handles null
+      tenantId: properTenantId,
 
       tenantName,
       tenantEmail: tenantEmail.toLowerCase(),
@@ -124,15 +159,20 @@ const createBookingHandler = async (req, res) => {
       paymentId,
       notes: notes || '',
 
+      // ⭐⭐⭐ ADD THESE TWO LINES ⭐⭐⭐
+      roomNumber: roomNumber,
+      occupancyType: occupancyType,
+
       rentDueDate: dueDate,
       lastRentPayment: new Date(),
       status: 'active',
       
-      // ✅ Initialize empty documents Map
       tenantDocuments: new Map()
     });
 
     console.log('✅ Booking created:', booking._id);
+    console.log('🚪 Room Number:', booking.roomNumber); // ⭐ LOG
+    console.log('👥 Occupancy Type:', booking.occupancyType); // ⭐ LOG
 
     res.status(201).json({
       success: true,
@@ -150,9 +190,9 @@ const createBookingHandler = async (req, res) => {
   }
 };
 
+// Don't forget to keep these lines at the end:
 router.post('/', createBookingHandler);
 router.post('/create', createBookingHandler);
-
 // =======================================================
 // UPDATE BOOKING - WITH MAP DOCUMENT HANDLING
 // =======================================================
