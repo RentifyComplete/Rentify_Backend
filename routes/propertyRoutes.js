@@ -1,8 +1,9 @@
 // ========================================
 // PROPERTY ROUTES - CORRECTED VERSION
-// File: routes/properties.js
+// File: routes/propertyRoutes.js
+// ✅ Fixed PDF upload with correct resource_type and access_mode
 // ✅ Fixed route ordering (admin routes first)
-// ✅ Added simple GET endpoint for PDF fixing
+// ✅ Proper error handling
 // ========================================
 
 const express = require('express');
@@ -38,24 +39,28 @@ const upload = multer({
   },
 });
 
-// ⭐⭐⭐ Helper function for PUBLIC PDF uploads ⭐⭐⭐
+// ⭐⭐⭐ CORRECTED Helper function for PUBLIC PDF uploads ⭐⭐⭐
 async function uploadPDFToCloudinary(filePath, filename) {
   try {
     const result = await cloudinary.uploader.upload(filePath, {
       folder: 'rental_agreements',
-      resource_type: 'raw',
+      resource_type: 'raw',        // ✅ CRITICAL: Use 'raw' for PDFs (not 'image')
       public_id: filename,
       type: 'upload',
-      access_mode: 'public',    // ⭐ MAKES PDF PUBLIC
+      access_mode: 'public',        // ✅ CRITICAL: Makes PDF publicly accessible
       overwrite: true,
     });
     
     console.log('✅ PDF uploaded as PUBLIC:', result.secure_url);
+    console.log('   Resource Type:', result.resource_type);
+    console.log('   Format:', result.format);
     
+    // Clean up temporary file
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
     
+    // ✅ URL will be: https://res.cloudinary.com/.../raw/upload/.../file.pdf
     return result.secure_url;
   } catch (error) {
     console.error('❌ PDF upload failed:', error);
@@ -87,7 +92,7 @@ async function uploadToCloudinary(filePath) {
 
 // ⭐⭐⭐ ADMIN ROUTES - MUST COME FIRST ⭐⭐⭐
 
-// Simple GET route to fix all PDFs - Just visit in browser!
+// ✅ IMPROVED: Fix all PDFs with better error handling
 router.get('/fix-pdfs', async (req, res) => {
   try {
     console.log('🔧 Starting PDF access fix...');
@@ -99,13 +104,36 @@ router.get('/fix-pdfs', async (req, res) => {
     console.log(`📊 Found ${properties.length} properties with PDFs`);
 
     const results = [];
+    let successCount = 0;
 
     for (const property of properties) {
       try {
-        const urlParts = property.agreementUrl.split('/');
-        const publicIdWithExt = urlParts.slice(-2).join('/');
+        const agreementUrl = property.agreementUrl;
+        
+        if (!agreementUrl || typeof agreementUrl !== 'string') {
+          results.push({
+            property: property.title || 'Unknown',
+            status: 'SKIPPED',
+            error: 'Invalid agreement URL'
+          });
+          continue;
+        }
+
+        // Extract public_id from URL
+        // URL format: https://res.cloudinary.com/{cloud}/raw/upload/v{version}/{folder}/{file}.pdf
+        // OR: https://res.cloudinary.com/{cloud}/image/upload/v{version}/{folder}/{file}.pdf (old wrong format)
+        const urlParts = agreementUrl.split('/');
+        const lastPart = urlParts[urlParts.length - 1]; // file.pdf
+        const folder = urlParts[urlParts.length - 2];   // rental_agreements
+        
+        const publicIdWithExt = `${folder}/${lastPart}`;
         const publicId = publicIdWithExt.replace('.pdf', '');
 
+        console.log(`🔄 Fixing: ${property.title}`);
+        console.log(`   URL: ${agreementUrl}`);
+        console.log(`   Public ID: ${publicId}`);
+
+        // Update access mode to public
         await cloudinary.api.update(publicId, {
           resource_type: 'raw',
           type: 'upload',
@@ -113,23 +141,23 @@ router.get('/fix-pdfs', async (req, res) => {
         });
 
         results.push({
-          property: property.title,
+          property: property.title || 'Unknown',
           status: 'FIXED',
-          url: property.agreementUrl
+          url: agreementUrl
         });
         
+        successCount++;
         console.log(`✅ Fixed: ${property.title}`);
+        
       } catch (err) {
         results.push({
-          property: property.title,
+          property: property.title || 'Unknown',
           status: 'FAILED',
           error: err.message
         });
         console.error(`❌ Failed: ${property.title}`, err.message);
       }
     }
-
-    const successCount = results.filter(r => r.status === 'FIXED').length;
 
     // Return nice HTML page
     res.send(`
@@ -138,35 +166,144 @@ router.get('/fix-pdfs', async (req, res) => {
       <head>
         <title>PDF Fix Results</title>
         <style>
-          body { font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px; }
-          h1 { color: #2ecc71; }
-          .box { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
-          .success { background: #d4edda; color: #155724; padding: 15px; border-radius: 5px; margin: 10px 0; }
-          .fail { background: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin: 10px 0; }
+          body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            max-width: 900px; 
+            margin: 50px auto; 
+            padding: 20px;
+            background: #f5f5f5;
+          }
+          h1 { 
+            color: #2ecc71;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+          }
+          .box { 
+            background: white;
+            padding: 20px; 
+            border-radius: 12px;
+            margin: 20px 0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+          }
+          .success { 
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            border-left: 4px solid #28a745;
+          }
+          .fail { 
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            border-left: 4px solid #dc3545;
+          }
+          .skip {
+            background: #fff3cd;
+            color: #856404;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            border-left: 4px solid #ffc107;
+          }
+          .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+          }
+          .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          }
+          .stat-number {
+            font-size: 36px;
+            font-weight: bold;
+            margin: 10px 0;
+          }
+          .stat-label {
+            color: #666;
+            font-size: 14px;
+          }
+          .next-steps {
+            background: #e7f3ff;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #2196f3;
+          }
+          .url-test {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            word-break: break-all;
+            font-size: 12px;
+            margin-top: 5px;
+          }
         </style>
       </head>
       <body>
-        <h1>🎉 PDF Fix Complete!</h1>
-        <div class="box">
-          <h2>Results:</h2>
-          <p><strong>✅ Success:</strong> ${successCount} PDFs</p>
-          <p><strong>❌ Failed:</strong> ${results.length - successCount} PDFs</p>
+        <h1>
+          <span style="font-size: 48px;">🎉</span>
+          PDF Fix Complete!
+        </h1>
+        
+        <div class="stats">
+          <div class="stat-card">
+            <div class="stat-number" style="color: #28a745;">${successCount}</div>
+            <div class="stat-label">Successfully Fixed</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-number" style="color: #dc3545;">${results.filter(r => r.status === 'FAILED').length}</div>
+            <div class="stat-label">Failed</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-number" style="color: #ffc107;">${results.filter(r => r.status === 'SKIPPED').length}</div>
+            <div class="stat-label">Skipped</div>
+          </div>
         </div>
         
-        ${results.map(r => `
-          <div class="${r.status === 'FIXED' ? 'success' : 'fail'}">
-            <strong>${r.status === 'FIXED' ? '✅' : '❌'} ${r.property}</strong><br>
-            <small>${r.url || r.error}</small>
-          </div>
-        `).join('')}
+        <div class="box">
+          <h2>📋 Detailed Results:</h2>
+          ${results.map(r => `
+            <div class="${r.status === 'FIXED' ? 'success' : r.status === 'FAILED' ? 'fail' : 'skip'}">
+              <strong>${r.status === 'FIXED' ? '✅' : r.status === 'FAILED' ? '❌' : '⚠️'} ${r.property}</strong><br>
+              ${r.url ? `
+                <div class="url-test">
+                  <a href="${r.url}" target="_blank" style="color: #007bff;">🔗 Test PDF: ${r.url}</a>
+                </div>
+              ` : ''}
+              ${r.error ? `<small style="color: #dc3545;">Error: ${r.error}</small>` : ''}
+            </div>
+          `).join('')}
+        </div>
         
-        <div class="box" style="background: #fff3cd;">
+        <div class="next-steps">
           <h3>✅ What's Next?</h3>
           <ol>
-            <li>PDFs are now publicly accessible</li>
-            <li>Test your Flutter app - 401 errors should be GONE!</li>
-            <li>All future uploads will be public automatically</li>
+            <li><strong>Test the PDFs:</strong> Click on the "Test PDF" links above - they should open directly in your browser</li>
+            <li><strong>Test your Flutter app:</strong> The 401 errors should now be GONE!</li>
+            <li><strong>Future uploads:</strong> All new PDFs will be public automatically</li>
           </ol>
+          
+          ${successCount > 0 ? `
+            <p style="margin-top: 20px; padding: 15px; background: #d4edda; border-radius: 8px;">
+              <strong>🎊 Great news!</strong> ${successCount} PDF${successCount > 1 ? 's are' : ' is'} now publicly accessible!
+            </p>
+          ` : ''}
+          
+          ${results.filter(r => r.status === 'FAILED').length > 0 ? `
+            <p style="margin-top: 20px; padding: 15px; background: #fff3cd; border-radius: 8px;">
+              <strong>⚠️ Note:</strong> Failed PDFs may need to be regenerated. 
+              Use the "Regenerate Agreement" button in your Flutter app for those properties.
+            </p>
+          ` : ''}
         </div>
       </body>
       </html>
@@ -174,7 +311,35 @@ router.get('/fix-pdfs', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error:', error);
-    res.status(500).send(`<h1>Error: ${error.message}</h1>`);
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Error</title>
+        <style>
+          body { 
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+          }
+          .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #dc3545;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="error">
+          <h1>❌ Error</h1>
+          <p>${error.message}</p>
+        </div>
+      </body>
+      </html>
+    `);
   }
 });
 
@@ -190,8 +355,12 @@ router.post('/fix-pdf/:propertyId', async (req, res) => {
       });
     }
 
-    const urlParts = property.agreementUrl.split('/');
-    const publicIdWithExt = urlParts.slice(-2).join('/');
+    const agreementUrl = property.agreementUrl;
+    const urlParts = agreementUrl.split('/');
+    const lastPart = urlParts[urlParts.length - 1];
+    const folder = urlParts[urlParts.length - 2];
+    
+    const publicIdWithExt = `${folder}/${lastPart}`;
     const publicId = publicIdWithExt.replace('.pdf', '');
 
     await cloudinary.api.update(publicId, {
