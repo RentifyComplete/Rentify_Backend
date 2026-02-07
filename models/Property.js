@@ -1,9 +1,9 @@
 // ========================================
-// FIXED PROPERTY MODEL - WITH ROOMS FIELD
+// FIXED PROPERTY MODEL - WITH AGREEMENT URL
 // File: models/Property.js
-// ✅ Added 'rooms' field for PG properties
-// ✅ Monthly service charge tracking
-// ✅ Payment history with proper validation
+// ✅ Added 'agreementUrl' field
+// ✅ Added 'ownerName' field
+// ✅ Added 'signatureUrl' field
 // ========================================
 
 const mongoose = require('mongoose');
@@ -48,7 +48,7 @@ const propertySchema = new mongoose.Schema(
     type: { type: String, required: true },
     bhk: String,
     beds: Number,
-    rooms: Number, // ⭐ ADDED: For PG room count
+    rooms: Number, // ⭐ For PG room count
     amenities: [String],
     description: { type: String, required: true },
     address: String,
@@ -60,6 +60,25 @@ const propertySchema = new mongoose.Schema(
     rating: { type: Number, default: 4.5 },
     isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
+    
+    // ⭐⭐⭐ NEW FIELDS FOR AGREEMENTS ⭐⭐⭐
+    ownerName: {
+      type: String,
+      default: null
+    },
+    signatureUrl: {
+      type: String,
+      default: null
+    },
+    agreementUrl: {
+      type: String,
+      default: null
+    },
+    agreementGeneratedAt: {
+      type: Date,
+      default: null
+    },
+    // ⭐⭐⭐ END NEW FIELDS ⭐⭐⭐
     
     // ⭐ Service Charge/Subscription Fields
     serviceDueDate: { 
