@@ -1,7 +1,8 @@
 // ========================================
-// FIXED PROPERTY ROUTES - WITH ROOMS FIELD
+// PROPERTY ROUTES - WITH AGREEMENT SUPPORT
 // File: routes/properties.js
 // ✅ Added 'rooms' field handling
+// ✅ Added agreement URL fields
 // ✅ Sets serviceDueDate on property creation
 // ✅ Calculates initial service charge
 // ========================================
@@ -144,7 +145,7 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       type,
       bhk,
       beds,
-      rooms, // ⭐ ADDED: Accept rooms field
+      rooms,
       amenities,
       description,
       address,
@@ -152,14 +153,20 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       state,
       zipCode,
       ownerId,
+      ownerName,        // ⭐ NEW
+      signatureUrl,     // ⭐ NEW
+      agreementUrl,     // ⭐ NEW
     } = req.body;
 
     console.log('📝 Creating new property...');
     console.log('  Title:', title);
     console.log('  Type:', type);
     console.log('  Beds:', beds);
-    console.log('  Rooms:', rooms); // ⭐ ADDED: Log rooms
+    console.log('  Rooms:', rooms);
     console.log('  Owner ID:', ownerId);
+    console.log('  Owner Name:', ownerName);
+    console.log('  Signature URL:', signatureUrl ? 'Provided' : 'Not provided');
+    console.log('  Agreement URL:', agreementUrl ? 'Provided' : 'Not provided');
 
     // Validate required fields
     if (!title || !location || !price || !type || !description || !ownerId) {
@@ -192,7 +199,7 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       type,
       bhk,
       beds: beds ? parseInt(beds) : undefined,
-      rooms: rooms ? parseInt(rooms) : undefined, // ⭐ ADDED: Handle rooms field
+      rooms: rooms ? parseInt(rooms) : undefined,
       amenities: typeof amenities === 'string' ? JSON.parse(amenities) : amenities,
       description,
       address,
@@ -201,7 +208,16 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       zipCode,
       ownerId,
       images: imageUrls,
+      ownerName,        // ⭐ NEW
+      signatureUrl,     // ⭐ NEW
+      agreementUrl,     // ⭐ NEW
     });
+
+    // ⭐ Set agreement generated timestamp if URL provided
+    if (agreementUrl) {
+      property.agreementGeneratedAt = new Date();
+      console.log('📄 Agreement URL saved:', agreementUrl);
+    }
 
     // ⭐ Set up service charge subscription
     const now = new Date();
@@ -247,7 +263,8 @@ router.post('/', upload.array('images', 10), async (req, res) => {
     console.log('  Monthly charge: ₹' + property.monthlyServiceCharge);
     console.log('  Due date: ' + property.serviceDueDate.toISOString());
     console.log('  Status: ' + property.serviceStatus);
-    if (rooms) console.log('  Rooms: ' + rooms); // ⭐ ADDED
+    if (rooms) console.log('  Rooms: ' + rooms);
+    if (agreementUrl) console.log('  Agreement: Generated and saved');
 
     const savedProperty = await property.save();
     console.log('✅ Property created successfully with ID:', savedProperty._id);
@@ -302,28 +319,51 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
       type,
       bhk,
       beds,
-      rooms, // ⭐ ADDED: Accept rooms in updates
+      rooms,
       amenities,
       description,
       address,
       city,
       state,
       zipCode,
+      agreementUrl,        // ⭐ NEW: Accept agreementUrl
+      ownerName,           // ⭐ NEW: Accept ownerName
+      signatureUrl,        // ⭐ NEW: Accept signatureUrl
     } = req.body;
 
+    console.log('🔄 Updating property:', req.params.id);
+    console.log('  Fields to update:', Object.keys(req.body));
+
+    // ⭐ Update basic fields
     if (title) property.title = title;
     if (location) property.location = location;
     if (price) property.price = price;
     if (type) property.type = type;
     if (bhk) property.bhk = bhk;
     if (beds) property.beds = parseInt(beds);
-    if (rooms) property.rooms = parseInt(rooms); // ⭐ ADDED
+    if (rooms) property.rooms = parseInt(rooms);
     if (amenities) property.amenities = typeof amenities === 'string' ? JSON.parse(amenities) : amenities;
     if (description) property.description = description;
     if (address) property.address = address;
     if (city) property.city = city;
     if (state) property.state = state;
     if (zipCode) property.zipCode = zipCode;
+
+    // ⭐⭐⭐ NEW: Update agreement and owner fields ⭐⭐⭐
+    if (agreementUrl !== undefined) {
+      property.agreementUrl = agreementUrl;
+      property.agreementGeneratedAt = new Date();
+      console.log('📄 Agreement URL updated:', agreementUrl);
+    }
+    if (ownerName !== undefined) {
+      property.ownerName = ownerName;
+      console.log('👤 Owner name updated:', ownerName);
+    }
+    if (signatureUrl !== undefined) {
+      property.signatureUrl = signatureUrl;
+      console.log('✍️ Signature URL updated:', signatureUrl);
+    }
+    // ⭐⭐⭐ END NEW FIELDS ⭐⭐⭐
 
     // ⭐ Recalculate service charge if type/beds/bhk/rooms changed
     if (type || bhk || beds || rooms) {
@@ -335,7 +375,9 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
       }
     }
 
+    // Handle image uploads (if any files were sent)
     if (req.files && req.files.length > 0) {
+      console.log(`📸 Uploading ${req.files.length} new images...`);
       const newImageUrls = [];
       for (const file of req.files) {
         try {
@@ -346,9 +388,12 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
         }
       }
       property.images = [...property.images, ...newImageUrls];
+      console.log(`✅ Added ${newImageUrls.length} new images`);
     }
 
     const updatedProperty = await property.save();
+
+    console.log('✅ Property updated successfully');
 
     res.status(200).json({
       success: true,
@@ -417,12 +462,20 @@ router.get('/owner/:ownerId', async (req, res) => {
       ownerId: req.params.ownerId,
     }).sort({ createdAt: -1 });
 
-    console.log(`✅ Found ${properties.length} properties`);
+    console.log(`✅ Found ${properties.length} properties for owner`);
+    
+    // ⭐ Log agreement status for debugging
+    properties.forEach(prop => {
+      console.log(`  📋 ${prop.title}:`);
+      console.log(`     - Agreement URL: ${prop.agreementUrl ? 'Yes' : 'No'}`);
+      console.log(`     - Signature URL: ${prop.signatureUrl ? 'Yes' : 'No'}`);
+      console.log(`     - Owner Name: ${prop.ownerName || 'Not set'}`);
+    });
 
     res.status(200).json({
       success: true,
       count: properties.length,
-      data: properties, // ⭐ Changed back to 'data' for consistency with Flutter service
+      data: properties,
     });
   } catch (error) {
     console.error('❌ Error fetching owner properties:', error);
