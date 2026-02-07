@@ -1,12 +1,8 @@
 // ========================================
-// PROPERTY ROUTES - WITH AGREEMENT SUPPORT & PUBLIC PDF ACCESS
+// PROPERTY ROUTES - CORRECTED VERSION
 // File: routes/properties.js
-// ✅ Added 'rooms' field handling
-// ✅ Added agreement URL fields
-// ✅ Sets serviceDueDate on property creation
-// ✅ Calculates initial service charge
-// ✅ PUBLIC PDF uploads configured
-// ✅ Batch PDF access fix route
+// ✅ Fixed route ordering (admin routes first)
+// ✅ Added simple GET endpoint for PDF fixing
 // ========================================
 
 const express = require('express');
@@ -42,21 +38,20 @@ const upload = multer({
   },
 });
 
-// ⭐⭐⭐ NEW: Helper function for PUBLIC PDF uploads ⭐⭐⭐
+// ⭐⭐⭐ Helper function for PUBLIC PDF uploads ⭐⭐⭐
 async function uploadPDFToCloudinary(filePath, filename) {
   try {
     const result = await cloudinary.uploader.upload(filePath, {
       folder: 'rental_agreements',
       resource_type: 'raw',
       public_id: filename,
-      type: 'upload',           // ⭐ KEY FIX
+      type: 'upload',
       access_mode: 'public',    // ⭐ MAKES PDF PUBLIC
       overwrite: true,
     });
     
     console.log('✅ PDF uploaded as PUBLIC:', result.secure_url);
     
-    // Clean up local file
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
@@ -90,59 +85,18 @@ async function uploadToCloudinary(filePath) {
   }
 }
 
-// ⭐⭐⭐ NEW ROUTE: Fix single PDF access ⭐⭐⭐
-router.post('/fix-pdf-access/:propertyId', async (req, res) => {
+// ⭐⭐⭐ ADMIN ROUTES - MUST COME FIRST ⭐⭐⭐
+
+// Simple GET route to fix all PDFs - Just visit in browser!
+router.get('/fix-pdfs', async (req, res) => {
   try {
-    const property = await Property.findById(req.params.propertyId);
+    console.log('🔧 Starting PDF access fix...');
     
-    if (!property || !property.agreementUrl) {
-      return res.status(404).json({
-        success: false,
-        message: 'Property or agreement not found'
-      });
-    }
-
-    // Extract public_id from Cloudinary URL
-    const urlParts = property.agreementUrl.split('/');
-    const publicIdWithExt = urlParts.slice(-2).join('/'); // rental_agreements/filename.pdf
-    const publicId = publicIdWithExt.replace('.pdf', '');
-
-    console.log('🔓 Making PDF public:', publicId);
-
-    // Update the resource to be public
-    const result = await cloudinary.api.update(publicId, {
-      resource_type: 'raw',
-      type: 'upload',
-      access_mode: 'public'
-    });
-
-    console.log('✅ PDF is now public');
-
-    res.status(200).json({
-      success: true,
-      message: 'PDF access updated to public',
-      url: result.secure_url
-    });
-
-  } catch (error) {
-    console.error('❌ Error updating PDF access:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update PDF access',
-      error: error.message
-    });
-  }
-});
-
-// ⭐⭐⭐ NEW ROUTE: Batch fix all PDFs ⭐⭐⭐
-router.post('/admin/fix-all-pdfs', async (req, res) => {
-  try {
-    console.log('🔧 Fixing all PDF access...');
-    
-    // Get all properties with agreement URLs
     const properties = await Property.find({ 
       agreementUrl: { $exists: true, $ne: null } 
     });
+
+    console.log(`📊 Found ${properties.length} properties with PDFs`);
 
     const results = [];
 
@@ -159,44 +113,108 @@ router.post('/admin/fix-all-pdfs', async (req, res) => {
         });
 
         results.push({
-          propertyId: property._id,
-          propertyTitle: property.title,
-          status: 'fixed',
+          property: property.title,
+          status: 'FIXED',
           url: property.agreementUrl
         });
         
         console.log(`✅ Fixed: ${property.title}`);
       } catch (err) {
         results.push({
-          propertyId: property._id,
-          propertyTitle: property.title,
-          status: 'failed',
+          property: property.title,
+          status: 'FAILED',
           error: err.message
         });
         console.error(`❌ Failed: ${property.title}`, err.message);
       }
     }
 
-    const successCount = results.filter(r => r.status === 'fixed').length;
-    const failCount = results.filter(r => r.status === 'failed').length;
+    const successCount = results.filter(r => r.status === 'FIXED').length;
+
+    // Return nice HTML page
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>PDF Fix Results</title>
+        <style>
+          body { font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px; }
+          h1 { color: #2ecc71; }
+          .box { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
+          .success { background: #d4edda; color: #155724; padding: 15px; border-radius: 5px; margin: 10px 0; }
+          .fail { background: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin: 10px 0; }
+        </style>
+      </head>
+      <body>
+        <h1>🎉 PDF Fix Complete!</h1>
+        <div class="box">
+          <h2>Results:</h2>
+          <p><strong>✅ Success:</strong> ${successCount} PDFs</p>
+          <p><strong>❌ Failed:</strong> ${results.length - successCount} PDFs</p>
+        </div>
+        
+        ${results.map(r => `
+          <div class="${r.status === 'FIXED' ? 'success' : 'fail'}">
+            <strong>${r.status === 'FIXED' ? '✅' : '❌'} ${r.property}</strong><br>
+            <small>${r.url || r.error}</small>
+          </div>
+        `).join('')}
+        
+        <div class="box" style="background: #fff3cd;">
+          <h3>✅ What's Next?</h3>
+          <ol>
+            <li>PDFs are now publicly accessible</li>
+            <li>Test your Flutter app - 401 errors should be GONE!</li>
+            <li>All future uploads will be public automatically</li>
+          </ol>
+        </div>
+      </body>
+      </html>
+    `);
+
+  } catch (error) {
+    console.error('❌ Error:', error);
+    res.status(500).send(`<h1>Error: ${error.message}</h1>`);
+  }
+});
+
+// Fix single property PDF
+router.post('/fix-pdf/:propertyId', async (req, res) => {
+  try {
+    const property = await Property.findById(req.params.propertyId);
+    
+    if (!property || !property.agreementUrl) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property or agreement not found'
+      });
+    }
+
+    const urlParts = property.agreementUrl.split('/');
+    const publicIdWithExt = urlParts.slice(-2).join('/');
+    const publicId = publicIdWithExt.replace('.pdf', '');
+
+    await cloudinary.api.update(publicId, {
+      resource_type: 'raw',
+      type: 'upload',
+      access_mode: 'public'
+    });
 
     res.status(200).json({
       success: true,
-      message: `Fixed ${successCount} PDFs, ${failCount} failed`,
-      totalProcessed: results.length,
-      successCount,
-      failCount,
-      results
+      message: 'PDF is now public',
+      url: property.agreementUrl
     });
 
   } catch (error) {
-    console.error('❌ Batch fix failed:', error);
     res.status(500).json({
       success: false,
       error: error.message
     });
   }
 });
+
+// ⭐⭐⭐ END ADMIN ROUTES ⭐⭐⭐
 
 // ------------------- GET all properties -------------------
 router.get('/', async (req, res) => {
@@ -293,30 +311,20 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       state,
       zipCode,
       ownerId,
-      ownerName,        // ⭐ NEW
-      signatureUrl,     // ⭐ NEW
-      agreementUrl,     // ⭐ NEW
+      ownerName,
+      signatureUrl,
+      agreementUrl,
     } = req.body;
 
     console.log('📝 Creating new property...');
-    console.log('  Title:', title);
-    console.log('  Type:', type);
-    console.log('  Beds:', beds);
-    console.log('  Rooms:', rooms);
-    console.log('  Owner ID:', ownerId);
-    console.log('  Owner Name:', ownerName);
-    console.log('  Signature URL:', signatureUrl ? 'Provided' : 'Not provided');
-    console.log('  Agreement URL:', agreementUrl ? 'Provided' : 'Not provided');
 
-    // Validate required fields
     if (!title || !location || !price || !type || !description || !ownerId) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields: title, location, price, type, description, ownerId',
+        message: 'Missing required fields',
       });
     }
 
-    // Upload images to Cloudinary
     const imageUrls = [];
     if (req.files && req.files.length > 0) {
       console.log(`📸 Uploading ${req.files.length} images...`);
@@ -328,10 +336,8 @@ router.post('/', upload.array('images', 10), async (req, res) => {
           console.error('Failed to upload image:', uploadError);
         }
       }
-      console.log(`✅ Uploaded ${imageUrls.length} images`);
     }
 
-    // Create property
     const property = new Property({
       title,
       location,
@@ -348,39 +354,32 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       zipCode,
       ownerId,
       images: imageUrls,
-      ownerName,        // ⭐ NEW
-      signatureUrl,     // ⭐ NEW
-      agreementUrl,     // ⭐ NEW
+      ownerName,
+      signatureUrl,
+      agreementUrl,
     });
 
-    // ⭐ Set agreement generated timestamp if URL provided
     if (agreementUrl) {
       property.agreementGeneratedAt = new Date();
-      console.log('📄 Agreement URL saved:', agreementUrl);
     }
 
-    // ⭐ Set up service charge subscription
     const now = new Date();
     property.serviceDueDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
     property.serviceStatus = 'active';
     property.lastServicePayment = now;
     property.monthlyServiceCharge = property.calculateServiceCharge();
 
-    // ⭐ Link the initial payment from temporary storage
     try {
       const owner = await User.findById(ownerId);
       if (owner && owner.tempPropertyPayment) {
         const tempPayment = owner.tempPropertyPayment;
         
         if (new Date() < tempPayment.expiresAt) {
-          console.log('🔗 Linking initial payment to property');
-          
           property.servicePaymentHistory = [{
             amount: tempPayment.amount,
             monthsPaid: 1,
             paymentId: tempPayment.paymentId,
             orderId: tempPayment.orderId,
-            paymentType: 'property_addition',
             status: 'completed',
             paidAt: tempPayment.paidAt,
           }];
@@ -388,38 +387,18 @@ router.post('/', upload.array('images', 10), async (req, res) => {
           await User.findByIdAndUpdate(ownerId, {
             $unset: { tempPropertyPayment: 1 }
           });
-          
-          console.log('✅ Initial payment linked successfully');
-          console.log('🎁 First month FREE activated');
-        } else {
-          console.log('⚠️ Temporary payment expired');
         }
       }
     } catch (linkError) {
       console.error('⚠️ Error linking payment:', linkError.message);
     }
 
-    console.log('💰 Service charge setup:');
-    console.log('  Monthly charge: ₹' + property.monthlyServiceCharge);
-    console.log('  Due date: ' + property.serviceDueDate.toISOString());
-    console.log('  Status: ' + property.serviceStatus);
-    if (rooms) console.log('  Rooms: ' + rooms);
-    if (agreementUrl) console.log('  Agreement: Generated and saved');
-
     const savedProperty = await property.save();
-    console.log('✅ Property created successfully with ID:', savedProperty._id);
 
     res.status(201).json({
       success: true,
       message: 'Property created successfully',
       data: savedProperty,
-      serviceInfo: {
-        monthlyCharge: savedProperty.monthlyServiceCharge,
-        nextDueDate: savedProperty.serviceDueDate,
-        status: savedProperty.serviceStatus,
-        message: 'Your property is active for 30 days. Next payment due on ' + 
-                 savedProperty.serviceDueDate.toLocaleDateString()
-      }
     });
   } catch (error) {
     console.error('❌ Error creating property:', error);
@@ -466,15 +445,11 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
       city,
       state,
       zipCode,
-      agreementUrl,        // ⭐ NEW: Accept agreementUrl
-      ownerName,           // ⭐ NEW: Accept ownerName
-      signatureUrl,        // ⭐ NEW: Accept signatureUrl
+      agreementUrl,
+      ownerName,
+      signatureUrl,
     } = req.body;
 
-    console.log('🔄 Updating property:', req.params.id);
-    console.log('  Fields to update:', Object.keys(req.body));
-
-    // ⭐ Update basic fields
     if (title) property.title = title;
     if (location) property.location = location;
     if (price) property.price = price;
@@ -489,35 +464,18 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
     if (state) property.state = state;
     if (zipCode) property.zipCode = zipCode;
 
-    // ⭐⭐⭐ NEW: Update agreement and owner fields ⭐⭐⭐
     if (agreementUrl !== undefined) {
       property.agreementUrl = agreementUrl;
       property.agreementGeneratedAt = new Date();
-      console.log('📄 Agreement URL updated:', agreementUrl);
     }
-    if (ownerName !== undefined) {
-      property.ownerName = ownerName;
-      console.log('👤 Owner name updated:', ownerName);
-    }
-    if (signatureUrl !== undefined) {
-      property.signatureUrl = signatureUrl;
-      console.log('✍️ Signature URL updated:', signatureUrl);
-    }
-    // ⭐⭐⭐ END NEW FIELDS ⭐⭐⭐
+    if (ownerName !== undefined) property.ownerName = ownerName;
+    if (signatureUrl !== undefined) property.signatureUrl = signatureUrl;
 
-    // ⭐ Recalculate service charge if type/beds/bhk/rooms changed
     if (type || bhk || beds || rooms) {
-      const oldCharge = property.monthlyServiceCharge;
       property.monthlyServiceCharge = property.calculateServiceCharge();
-      
-      if (oldCharge !== property.monthlyServiceCharge) {
-        console.log(`💰 Service charge updated: ₹${oldCharge} → ₹${property.monthlyServiceCharge}`);
-      }
     }
 
-    // Handle image uploads (if any files were sent)
     if (req.files && req.files.length > 0) {
-      console.log(`📸 Uploading ${req.files.length} new images...`);
       const newImageUrls = [];
       for (const file of req.files) {
         try {
@@ -528,12 +486,9 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
         }
       }
       property.images = [...property.images, ...newImageUrls];
-      console.log(`✅ Added ${newImageUrls.length} new images`);
     }
 
     const updatedProperty = await property.save();
-
-    console.log('✅ Property updated successfully');
 
     res.status(200).json({
       success: true,
@@ -577,8 +532,6 @@ router.delete('/:id', async (req, res) => {
     property.suspensionReason = 'Deleted by owner';
     await property.save();
 
-    console.log(`🗑️  Property soft-deleted: ${property._id}`);
-
     res.status(200).json({
       success: true,
       message: 'Property deleted successfully',
@@ -596,21 +549,9 @@ router.delete('/:id', async (req, res) => {
 // ------------------- GET properties by owner -------------------
 router.get('/owner/:ownerId', async (req, res) => {
   try {
-    console.log('🔍 Fetching properties for owner:', req.params.ownerId);
-    
     const properties = await Property.find({
       ownerId: req.params.ownerId,
     }).sort({ createdAt: -1 });
-
-    console.log(`✅ Found ${properties.length} properties for owner`);
-    
-    // ⭐ Log agreement status for debugging
-    properties.forEach(prop => {
-      console.log(`  📋 ${prop.title}:`);
-      console.log(`     - Agreement URL: ${prop.agreementUrl ? 'Yes' : 'No'}`);
-      console.log(`     - Signature URL: ${prop.signatureUrl ? 'Yes' : 'No'}`);
-      console.log(`     - Owner Name: ${prop.ownerName || 'Not set'}`);
-    });
 
     res.status(200).json({
       success: true,
@@ -627,6 +568,5 @@ router.get('/owner/:ownerId', async (req, res) => {
   }
 });
 
-// ⭐⭐⭐ EXPORT uploadPDFToCloudinary for use in other routes ⭐⭐⭐
 module.exports = router;
 module.exports.uploadPDFToCloudinary = uploadPDFToCloudinary;
