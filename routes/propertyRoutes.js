@@ -1,10 +1,12 @@
 // ========================================
-// PROPERTY ROUTES - WITH AGREEMENT SUPPORT
+// PROPERTY ROUTES - WITH AGREEMENT SUPPORT & PUBLIC PDF ACCESS
 // File: routes/properties.js
 // ✅ Added 'rooms' field handling
 // ✅ Added agreement URL fields
 // ✅ Sets serviceDueDate on property creation
 // ✅ Calculates initial service charge
+// ✅ PUBLIC PDF uploads configured
+// ✅ Batch PDF access fix route
 // ========================================
 
 const express = require('express');
@@ -21,6 +23,7 @@ cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true,
 });
 
 // Multer configuration with validation
@@ -39,7 +42,36 @@ const upload = multer({
   },
 });
 
-// Helper function for Cloudinary upload
+// ⭐⭐⭐ NEW: Helper function for PUBLIC PDF uploads ⭐⭐⭐
+async function uploadPDFToCloudinary(filePath, filename) {
+  try {
+    const result = await cloudinary.uploader.upload(filePath, {
+      folder: 'rental_agreements',
+      resource_type: 'raw',
+      public_id: filename,
+      type: 'upload',           // ⭐ KEY FIX
+      access_mode: 'public',    // ⭐ MAKES PDF PUBLIC
+      overwrite: true,
+    });
+    
+    console.log('✅ PDF uploaded as PUBLIC:', result.secure_url);
+    
+    // Clean up local file
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    
+    return result.secure_url;
+  } catch (error) {
+    console.error('❌ PDF upload failed:', error);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+    throw error;
+  }
+}
+
+// Helper function for Cloudinary image upload
 async function uploadToCloudinary(filePath) {
   try {
     const result = await cloudinary.uploader.upload(filePath, {
@@ -57,6 +89,114 @@ async function uploadToCloudinary(filePath) {
     throw error;
   }
 }
+
+// ⭐⭐⭐ NEW ROUTE: Fix single PDF access ⭐⭐⭐
+router.post('/fix-pdf-access/:propertyId', async (req, res) => {
+  try {
+    const property = await Property.findById(req.params.propertyId);
+    
+    if (!property || !property.agreementUrl) {
+      return res.status(404).json({
+        success: false,
+        message: 'Property or agreement not found'
+      });
+    }
+
+    // Extract public_id from Cloudinary URL
+    const urlParts = property.agreementUrl.split('/');
+    const publicIdWithExt = urlParts.slice(-2).join('/'); // rental_agreements/filename.pdf
+    const publicId = publicIdWithExt.replace('.pdf', '');
+
+    console.log('🔓 Making PDF public:', publicId);
+
+    // Update the resource to be public
+    const result = await cloudinary.api.update(publicId, {
+      resource_type: 'raw',
+      type: 'upload',
+      access_mode: 'public'
+    });
+
+    console.log('✅ PDF is now public');
+
+    res.status(200).json({
+      success: true,
+      message: 'PDF access updated to public',
+      url: result.secure_url
+    });
+
+  } catch (error) {
+    console.error('❌ Error updating PDF access:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update PDF access',
+      error: error.message
+    });
+  }
+});
+
+// ⭐⭐⭐ NEW ROUTE: Batch fix all PDFs ⭐⭐⭐
+router.post('/admin/fix-all-pdfs', async (req, res) => {
+  try {
+    console.log('🔧 Fixing all PDF access...');
+    
+    // Get all properties with agreement URLs
+    const properties = await Property.find({ 
+      agreementUrl: { $exists: true, $ne: null } 
+    });
+
+    const results = [];
+
+    for (const property of properties) {
+      try {
+        const urlParts = property.agreementUrl.split('/');
+        const publicIdWithExt = urlParts.slice(-2).join('/');
+        const publicId = publicIdWithExt.replace('.pdf', '');
+
+        await cloudinary.api.update(publicId, {
+          resource_type: 'raw',
+          type: 'upload',
+          access_mode: 'public'
+        });
+
+        results.push({
+          propertyId: property._id,
+          propertyTitle: property.title,
+          status: 'fixed',
+          url: property.agreementUrl
+        });
+        
+        console.log(`✅ Fixed: ${property.title}`);
+      } catch (err) {
+        results.push({
+          propertyId: property._id,
+          propertyTitle: property.title,
+          status: 'failed',
+          error: err.message
+        });
+        console.error(`❌ Failed: ${property.title}`, err.message);
+      }
+    }
+
+    const successCount = results.filter(r => r.status === 'fixed').length;
+    const failCount = results.filter(r => r.status === 'failed').length;
+
+    res.status(200).json({
+      success: true,
+      message: `Fixed ${successCount} PDFs, ${failCount} failed`,
+      totalProcessed: results.length,
+      successCount,
+      failCount,
+      results
+    });
+
+  } catch (error) {
+    console.error('❌ Batch fix failed:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 
 // ------------------- GET all properties -------------------
 router.get('/', async (req, res) => {
@@ -487,4 +627,6 @@ router.get('/owner/:ownerId', async (req, res) => {
   }
 });
 
+// ⭐⭐⭐ EXPORT uploadPDFToCloudinary for use in other routes ⭐⭐⭐
 module.exports = router;
+module.exports.uploadPDFToCloudinary = uploadPDFToCloudinary;
