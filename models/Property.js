@@ -1,9 +1,10 @@
 // ========================================
-// FIXED PROPERTY MODEL - WITH AGREEMENT URL
+// PROPERTY MODEL - WITH AGREEMENT SUPPORT
 // File: models/Property.js
-// ✅ Added 'agreementUrl' field
-// ✅ Added 'ownerName' field
-// ✅ Added 'signatureUrl' field
+// ✅ Added 'rooms' field for PG properties
+// ✅ Added agreement fields
+// ✅ Monthly service charge tracking
+// ✅ Payment history with proper validation
 // ========================================
 
 const mongoose = require('mongoose');
