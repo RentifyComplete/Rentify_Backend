@@ -53,6 +53,7 @@ async function uploadPDFToCloudinary(filePath, filename) {
       public_id: filename,
       type: 'upload',                 // ✅ CRITICAL: Must be 'upload'
       access_mode: 'public',          // ✅ CRITICAL: Makes PDF publicly accessible
+      flags: 'attachment:false',      // ⭐ NEW: Display inline instead of forcing download
       overwrite: true,
       invalidate: true,               // Clear CDN cache
     });
