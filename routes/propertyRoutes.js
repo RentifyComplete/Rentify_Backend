@@ -51,9 +51,8 @@ async function uploadPDFToCloudinary(filePath, filename) {
       folder: 'rental_agreements',
       resource_type: 'raw',           // ✅ CRITICAL: 'raw' for PDFs
       public_id: filename,
-      type: 'upload',                 // ✅ CRITICAL: Must be 'upload'
+      flags: 'attachment:false',      // ⭐ Display inline, not download
       access_mode: 'public',          // ✅ CRITICAL: Makes PDF publicly accessible
-      flags: 'attachment:false',      // ⭐ NEW: Display inline instead of forcing download
       overwrite: true,
       invalidate: true,               // Clear CDN cache
     });
@@ -62,12 +61,19 @@ async function uploadPDFToCloudinary(filePath, filename) {
     console.log('   URL:', result.secure_url);
     console.log('   Resource Type:', result.resource_type);
     console.log('   Format:', result.format);
-    console.log('   Access Mode:', result.access_mode || 'public (default)');
     
-    // ⭐ Verify the upload was successful
-    if (result.resource_type !== 'raw') {
-      console.warn('⚠️ WARNING: PDF uploaded as', result.resource_type, 'instead of raw!');
+    // ⭐ IMPORTANT: Manually construct the URL with fl_attachment:false
+    // This ensures the flag is in the URL even if Cloudinary doesn't add it automatically
+    let finalUrl = result.secure_url;
+    
+    // Check if the URL already has the flag
+    if (!finalUrl.includes('fl_attachment')) {
+      // Insert the flag after /upload/
+      finalUrl = finalUrl.replace('/upload/', '/upload/fl_attachment:false/');
+      console.log('✅ Added fl_attachment:false to URL');
     }
+    
+    console.log('   Final URL:', finalUrl);
     
     // Clean up temporary file
     if (fs.existsSync(filePath)) {
@@ -75,8 +81,7 @@ async function uploadPDFToCloudinary(filePath, filename) {
       console.log('🗑️ Temporary file deleted');
     }
     
-    // ⭐ The URL will be: https://res.cloudinary.com/.../raw/upload/.../file.pdf
-    return result.secure_url;
+    return finalUrl; // ⭐ Return the modified URL with the flag
   } catch (error) {
     console.error('❌ PDF upload failed:', error.message);
     console.error('   Full error:', error);
