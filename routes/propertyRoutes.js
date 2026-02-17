@@ -261,7 +261,118 @@ router.get('/:id', async (req, res) => {
     });
   }
 });
+// ========================================
+// ADD THIS ROUTE to your propertyRoutes.js
+// This accepts JSON with image URLs from Supabase
+// Add BEFORE your existing router.post('/', upload.array...)
+// ========================================
 
+// ✅ NEW: Create property with pre-uploaded image URLs (from Supabase)
+router.post('/with-urls', async (req, res) => {
+  try {
+    const {
+      title,
+      location,
+      price,
+      type,
+      bhk,
+      beds,
+      rooms,
+      amenities,
+      description,
+      address,
+      city,
+      state,
+      zipCode,
+      ownerId,
+      ownerName,
+      signatureUrl,
+      agreementUrl,
+      images, // ⭐ Array of Supabase URLs
+    } = req.body;
+
+    console.log('📝 Creating new property with Supabase URLs...');
+    console.log('   Images:', images?.length, 'URLs');
+    console.log('   Agreement:', agreementUrl);
+
+    if (!title || !location || !price || !type || !description || !ownerId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields',
+      });
+    }
+
+    const property = new Property({
+      title,
+      location,
+      price,
+      type,
+      bhk,
+      beds: beds ? parseInt(beds) : undefined,
+      rooms: rooms ? parseInt(rooms) : undefined,
+      amenities: typeof amenities === 'string' ? JSON.parse(amenities) : (amenities || []),
+      description,
+      address,
+      city,
+      state,
+      zipCode,
+      ownerId,
+      images: images || [], // ⭐ Use Supabase URLs directly
+      ownerName,
+      signatureUrl,
+      agreementUrl,
+    });
+
+    if (agreementUrl) {
+      property.agreementGeneratedAt = new Date();
+    }
+
+    const now = new Date();
+    property.serviceDueDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    property.serviceStatus = 'active';
+    property.lastServicePayment = now;
+    property.monthlyServiceCharge = property.calculateServiceCharge();
+
+    try {
+      const owner = await User.findById(ownerId);
+      if (owner && owner.tempPropertyPayment) {
+        const tempPayment = owner.tempPropertyPayment;
+        if (new Date() < tempPayment.expiresAt) {
+          property.servicePaymentHistory = [{
+            amount: tempPayment.amount,
+            monthsPaid: 1,
+            paymentId: tempPayment.paymentId,
+            orderId: tempPayment.orderId,
+            status: 'completed',
+            paidAt: tempPayment.paidAt,
+          }];
+          await User.findByIdAndUpdate(ownerId, {
+            $unset: { tempPropertyPayment: 1 }
+          });
+        }
+      }
+    } catch (linkError) {
+      console.error('⚠️ Error linking payment:', linkError.message);
+    }
+
+    const savedProperty = await property.save();
+
+    console.log('✅ Property created:', savedProperty._id);
+
+    res.status(201).json({
+      success: true,
+      message: 'Property created successfully',
+      data: savedProperty,
+    });
+  } catch (error) {
+    console.error('❌ Error creating property with URLs:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create property',
+      error: error.message,
+    });
+  }
+});
 // ========================================
 // POST create new property
 // ========================================
