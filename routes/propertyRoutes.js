@@ -1,9 +1,10 @@
 // ========================================
-// PROPERTY ROUTES - COMPLETE FIX FOR PDF 401 ERRORS
+// PROPERTY ROUTES - SUPABASE STORAGE
 // File: routes/propertyRoutes.js
-// ✅ Fixed PDF upload with access_mode: 'public'
-// ✅ Fixed signature generation
-// ✅ Proper error handling
+// ✅ Replaced Cloudinary with Supabase
+// ✅ PDFs open directly in browser
+// ✅ No more 401 errors
+// ✅ Simple public URLs
 // ========================================
 
 const express = require('express');
@@ -11,22 +12,19 @@ const router = express.Router();
 const Property = require('../models/Property');
 const User = require('../models/user');
 const multer = require('multer');
-const cloudinary = require('cloudinary').v2;
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios'); // ✅ NEW: For Supabase uploads
 
-// Cloudinary configuration
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-  secure: true,
-});
+// ✅ Supabase configuration (replaces Cloudinary)
+const SUPABASE_URL = 'https://sysgayeogkjjulqkzaee.supabase.co';
+const SUPABASE_KEY = 'sb_secret_s6gB8PeTTpGXC1qPDfIpQA_mCJxKzAv';
+const SUPABASE_BUCKET = 'rentify-files';
 
-// Multer configuration with validation
+// Multer configuration
 const upload = multer({
   dest: 'uploads/',
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
     const filetypes = /jpeg|jpg|png|webp/;
     const mimetype = filetypes.test(file.mimetype);
@@ -39,499 +37,153 @@ const upload = multer({
   },
 });
 
-// ⭐⭐⭐ COMPLETELY FIXED: Upload PDF with PUBLIC access (no 401 errors) ⭐⭐⭐
-async function uploadPDFToCloudinary(filePath, filename) {
+// ========================================
+// UPLOAD PDF TO SUPABASE
+// ========================================
+async function uploadPDFToSupabase(filePath, filename) {
   try {
-    console.log('📤 Uploading PDF to Cloudinary...');
+    console.log('📤 Uploading PDF to Supabase...');
     console.log('   File path:', filePath);
     console.log('   Filename:', filename);
-    
-    // ⭐ THE FIX: Use these exact parameters
-    const result = await cloudinary.uploader.upload(filePath, {
-      folder: 'rental_agreements',
-      resource_type: 'raw',           // ✅ CRITICAL: 'raw' for PDFs
-      public_id: filename,
-      flags: 'attachment:false',      // ⭐ Display inline, not download
-      access_mode: 'public',          // ✅ CRITICAL: Makes PDF publicly accessible
-      overwrite: true,
-      invalidate: true,               // Clear CDN cache
-    });
-    
-    console.log('✅ PDF uploaded successfully!');
-    console.log('   URL:', result.secure_url);
-    console.log('   Resource Type:', result.resource_type);
-    console.log('   Format:', result.format);
-    
-    // ⭐ IMPORTANT: Manually construct the URL with fl_attachment:false
-    // This ensures the flag is in the URL even if Cloudinary doesn't add it automatically
-    let finalUrl = result.secure_url;
-    
-    // Check if the URL already has the flag
-    if (!finalUrl.includes('fl_attachment')) {
-      // Insert the flag after /upload/
-      finalUrl = finalUrl.replace('/upload/', '/upload/fl_attachment:false/');
-      console.log('✅ Added fl_attachment:false to URL');
+
+    // Read file
+    const fileBuffer = fs.readFileSync(filePath);
+    console.log('   File size:', fileBuffer.length, 'bytes');
+
+    // Upload path in bucket
+    const uploadPath = `rental_agreements/${filename}`;
+
+    // Upload to Supabase Storage
+    const response = await axios.post(
+      `${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${uploadPath}`,
+      fileBuffer,
+      {
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/pdf',
+          'x-upsert': 'true',
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      }
+    );
+
+    if (response.status === 200 || response.status === 201) {
+      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${uploadPath}`;
+
+      console.log('✅ PDF uploaded successfully to Supabase!');
+      console.log('   URL:', publicUrl);
+      console.log('   🎉 This URL opens directly in browser!');
+
+      // Clean up temp file
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.log('🗑️ Temporary file deleted');
+      }
+
+      return publicUrl;
+    } else {
+      throw new Error(`Upload failed with status ${response.status}`);
     }
-    
-    console.log('   Final URL:', finalUrl);
-    
-    // Clean up temporary file
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      console.log('🗑️ Temporary file deleted');
-    }
-    
-    return finalUrl; // ⭐ Return the modified URL with the flag
+
   } catch (error) {
-    console.error('❌ PDF upload failed:', error.message);
-    console.error('   Full error:', error);
-    
+    console.error('❌ Supabase PDF upload failed:', error.message);
+
     // Clean up on error
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
-    
+
     throw error;
   }
 }
 
-// Helper function for Cloudinary image upload
-async function uploadToCloudinary(filePath) {
+// ========================================
+// UPLOAD IMAGE TO SUPABASE
+// ========================================
+async function uploadImageToSupabase(filePath, folder = 'property_images') {
   try {
-    const result = await cloudinary.uploader.upload(filePath, {
-      folder: 'rentify_properties',
-      transformation: [
-        { width: 1200, height: 800, crop: 'limit' },
-        { quality: 'auto' },
-      ],
-    });
-    fs.unlinkSync(filePath);
-    return result.secure_url;
+    console.log('📸 Uploading image to Supabase...');
+
+    const fileBuffer = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const filename = `${Date.now()}_${Math.random().toString(36).substring(7)}${ext}`;
+    const uploadPath = `${folder}/${filename}`;
+
+    // Detect content type
+    const mimeTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.webp': 'image/webp',
+    };
+    const contentType = mimeTypes[ext] || 'image/jpeg';
+
+    const response = await axios.post(
+      `${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${uploadPath}`,
+      fileBuffer,
+      {
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': contentType,
+          'x-upsert': 'true',
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      }
+    );
+
+    if (response.status === 200 || response.status === 201) {
+      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${uploadPath}`;
+
+      console.log('✅ Image uploaded:', publicUrl);
+
+      // Clean up
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+
+      return publicUrl;
+    } else {
+      throw new Error(`Upload failed with status ${response.status}`);
+    }
+
   } catch (error) {
-    console.error('❌ Cloudinary upload error:', error);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    console.error('❌ Supabase image upload failed:', error.message);
+
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
     throw error;
   }
 }
 
-// ⭐⭐⭐ ADMIN ROUTES - MUST COME FIRST ⭐⭐⭐
-
-// ✅ Fix ALL existing PDFs that have access issues
+// ========================================
+// ADMIN ROUTES - FIX PDFs (kept for reference)
+// ========================================
 router.get('/fix-pdfs', async (req, res) => {
   try {
-    console.log('🔧 Starting comprehensive PDF fix...');
-    
-    const properties = await Property.find({ 
-      agreementUrl: { $exists: true, $ne: null } 
+    const properties = await Property.find({
+      agreementUrl: { $exists: true, $ne: null }
     });
 
-    console.log(`📊 Found ${properties.length} properties with PDFs`);
-
-    const results = [];
-    let successCount = 0;
-    let failCount = 0;
-
-    for (const property of properties) {
-      try {
-        const agreementUrl = property.agreementUrl;
-        
-        if (!agreementUrl || typeof agreementUrl !== 'string') {
-          results.push({
-            property: property.title || 'Unknown',
-            status: 'SKIPPED',
-            error: 'Invalid agreement URL'
-          });
-          continue;
-        }
-
-        // Extract public_id from URL
-        // Example URL: https://res.cloudinary.com/dojen4kyp/image/upload/v1234/rental_agreements/file.pdf
-        // We need: rental_agreements/file
-        
-        let publicId;
-        try {
-          const urlParts = agreementUrl.split('/');
-          const filename = urlParts[urlParts.length - 1]; // file.pdf
-          const folder = urlParts[urlParts.length - 2];   // rental_agreements or version number
-          
-          // Check if folder is actually a version number (starts with 'v')
-          if (folder.startsWith('v')) {
-            // Version is present, folder is one more back
-            const actualFolder = urlParts[urlParts.length - 3];
-            publicId = `${actualFolder}/${filename.replace('.pdf', '')}`;
-          } else {
-            publicId = `${folder}/${filename.replace('.pdf', '')}`;
-          }
-          
-          console.log(`🔍 Processing: ${property.title}`);
-          console.log(`   URL: ${agreementUrl}`);
-          console.log(`   Extracted Public ID: ${publicId}`);
-        } catch (parseError) {
-          console.error(`❌ Failed to parse URL for ${property.title}:`, parseError);
-          results.push({
-            property: property.title || 'Unknown',
-            status: 'FAILED',
-            error: 'Could not parse URL: ' + parseError.message
-          });
-          failCount++;
-          continue;
-        }
-
-        // ⭐ Update the resource to be public using Cloudinary API
-        try {
-          const updateResult = await cloudinary.api.update(publicId, {
-            resource_type: 'raw',
-            type: 'upload',
-            access_mode: 'public'
-          });
-          
-          console.log(`✅ Updated access mode for: ${property.title}`);
-          console.log(`   Access mode:`, updateResult.access_mode);
-          
-          results.push({
-            property: property.title || 'Unknown',
-            status: 'FIXED',
-            url: agreementUrl,
-            publicId: publicId
-          });
-          
-          successCount++;
-          
-        } catch (apiError) {
-          // If API update fails, the resource might not exist as 'raw'
-          // It might be uploaded as 'image' - try that
-          try {
-            console.log(`⚠️ Trying as 'image' resource type...`);
-            await cloudinary.api.update(publicId, {
-              resource_type: 'image',
-              type: 'upload',
-              access_mode: 'public'
-            });
-            
-            console.log(`✅ Fixed as image type: ${property.title}`);
-            results.push({
-              property: property.title || 'Unknown',
-              status: 'FIXED (as image)',
-              url: agreementUrl,
-              publicId: publicId,
-              warning: 'PDF was uploaded as image type - consider regenerating'
-            });
-            
-            successCount++;
-          } catch (imageError) {
-            console.error(`❌ Could not fix ${property.title}:`, apiError.message);
-            results.push({
-              property: property.title || 'Unknown',
-              status: 'FAILED',
-              error: apiError.message,
-              suggestion: 'Try regenerating the agreement'
-            });
-            failCount++;
-          }
-        }
-        
-      } catch (err) {
-        results.push({
-          property: property.title || 'Unknown',
-          status: 'FAILED',
-          error: err.message
-        });
-        failCount++;
-        console.error(`❌ Failed: ${property.title}`, err.message);
-      }
-    }
-
-    // Generate HTML report
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>PDF Fix Results</title>
-        <meta charset="UTF-8">
-        <style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-          }
-          .container {
-            max-width: 1000px;
-            margin: 0 auto;
-          }
-          h1 { 
-            color: white;
-            font-size: 42px;
-            margin-bottom: 30px;
-            text-align: center;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
-          }
-          .stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-          }
-          .stat-card {
-            background: white;
-            padding: 25px;
-            border-radius: 12px;
-            text-align: center;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            transition: transform 0.2s;
-          }
-          .stat-card:hover {
-            transform: translateY(-5px);
-          }
-          .stat-number {
-            font-size: 48px;
-            font-weight: bold;
-            margin: 10px 0;
-          }
-          .stat-label {
-            color: #666;
-            font-size: 14px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-          }
-          .results-box {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-          }
-          .result-item {
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 8px;
-            border-left: 4px solid;
-          }
-          .success { 
-            background: #d4edda;
-            border-color: #28a745;
-            color: #155724;
-          }
-          .fail { 
-            background: #f8d7da;
-            border-color: #dc3545;
-            color: #721c24;
-          }
-          .skip {
-            background: #fff3cd;
-            border-color: #ffc107;
-            color: #856404;
-          }
-          .url-test {
-            background: #f8f9fa;
-            padding: 10px;
-            border-radius: 4px;
-            margin-top: 8px;
-            font-size: 12px;
-            word-break: break-all;
-          }
-          .url-test a {
-            color: #007bff;
-            text-decoration: none;
-          }
-          .url-test a:hover {
-            text-decoration: underline;
-          }
-          .next-steps {
-            background: white;
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-          }
-          .next-steps h3 {
-            color: #667eea;
-            margin-bottom: 15px;
-          }
-          .next-steps ol {
-            margin-left: 20px;
-          }
-          .next-steps li {
-            margin: 10px 0;
-            line-height: 1.6;
-          }
-          .alert {
-            padding: 15px;
-            border-radius: 8px;
-            margin: 15px 0;
-          }
-          .alert-success {
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-            color: #155724;
-          }
-          .alert-warning {
-            background: #fff3cd;
-            border: 1px solid #ffeeba;
-            color: #856404;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h1>🎉 PDF Access Fix Complete!</h1>
-          
-          <div class="stats">
-            <div class="stat-card">
-              <div class="stat-number" style="color: #28a745;">${successCount}</div>
-              <div class="stat-label">✅ Fixed</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-number" style="color: #dc3545;">${failCount}</div>
-              <div class="stat-label">❌ Failed</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-number" style="color: #007bff;">${properties.length}</div>
-              <div class="stat-label">📄 Total PDFs</div>
-            </div>
-          </div>
-          
-          <div class="results-box">
-            <h2 style="margin-bottom: 20px;">📋 Detailed Results</h2>
-            ${results.map(r => `
-              <div class="result-item ${r.status === 'FIXED' || r.status.includes('FIXED') ? 'success' : r.status === 'FAILED' ? 'fail' : 'skip'}">
-                <strong>
-                  ${r.status === 'FIXED' || r.status.includes('FIXED') ? '✅' : r.status === 'FAILED' ? '❌' : '⚠️'} 
-                  ${r.property}
-                </strong>
-                ${r.publicId ? `<br><small style="color: #666;">Public ID: ${r.publicId}</small>` : ''}
-                ${r.url ? `
-                  <div class="url-test">
-                    <a href="${r.url}" target="_blank">🔗 Test PDF: ${r.url}</a>
-                  </div>
-                ` : ''}
-                ${r.error ? `<br><small style="color: #dc3545; margin-top: 5px; display: block;">Error: ${r.error}</small>` : ''}
-                ${r.warning ? `<br><small style="color: #ff6b6b; margin-top: 5px; display: block;">⚠️ ${r.warning}</small>` : ''}
-                ${r.suggestion ? `<br><small style="color: #666; margin-top: 5px; display: block;">💡 ${r.suggestion}</small>` : ''}
-              </div>
-            `).join('')}
-          </div>
-          
-          <div class="next-steps">
-            <h3>✅ What's Next?</h3>
-            <ol>
-              <li><strong>Test the PDFs:</strong> Click on the "Test PDF" links above - they should open directly without 401 errors!</li>
-              <li><strong>Test your Flutter app:</strong> Try downloading a PDF - the 401 error should be gone!</li>
-              <li><strong>Regenerate failed PDFs:</strong> For any PDFs that failed to fix, use the "Regenerate Agreement" button in your app</li>
-              <li><strong>Future uploads:</strong> All new PDFs will be public automatically with the updated code</li>
-            </ol>
-            
-            ${successCount > 0 ? `
-              <div class="alert alert-success">
-                <strong>🎊 Success!</strong> ${successCount} PDF${successCount > 1 ? 's are' : ' is'} now publicly accessible!
-              </div>
-            ` : ''}
-            
-            ${failCount > 0 ? `
-              <div class="alert alert-warning">
-                <strong>⚠️ Note:</strong> ${failCount} PDF${failCount > 1 ? 's' : ''} could not be automatically fixed. 
-                These may need to be regenerated using the Flutter app.
-              </div>
-            ` : ''}
-          </div>
-        </div>
-      </body>
-      </html>
-    `);
-
-  } catch (error) {
-    console.error('❌ Fatal error:', error);
-    res.status(500).send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Error</title>
-        <style>
-          body { 
-            font-family: Arial, sans-serif;
-            max-width: 600px;
-            margin: 50px auto;
-            padding: 20px;
-          }
-          .error {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 20px;
-            border-radius: 8px;
-            border-left: 4px solid #dc3545;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="error">
-          <h1>❌ Error</h1>
-          <p><strong>Message:</strong> ${error.message}</p>
-          <p><strong>Stack:</strong> <pre>${error.stack}</pre></p>
-        </div>
-      </body>
-      </html>
-    `);
-  }
-});
-
-// Fix single property PDF
-router.post('/fix-pdf/:propertyId', async (req, res) => {
-  try {
-    const property = await Property.findById(req.params.propertyId);
-    
-    if (!property || !property.agreementUrl) {
-      return res.status(404).json({
-        success: false,
-        message: 'Property or agreement not found'
-      });
-    }
-
-    const agreementUrl = property.agreementUrl;
-    const urlParts = agreementUrl.split('/');
-    const filename = urlParts[urlParts.length - 1];
-    const folder = urlParts[urlParts.length - 2];
-    
-    let publicId;
-    if (folder.startsWith('v')) {
-      const actualFolder = urlParts[urlParts.length - 3];
-      publicId = `${actualFolder}/${filename.replace('.pdf', '')}`;
-    } else {
-      publicId = `${folder}/${filename.replace('.pdf', '')}`;
-    }
-
-    // Try raw first
-    try {
-      await cloudinary.api.update(publicId, {
-        resource_type: 'raw',
-        type: 'upload',
-        access_mode: 'public'
-      });
-    } catch (err) {
-      // Try as image if raw fails
-      await cloudinary.api.update(publicId, {
-        resource_type: 'image',
-        type: 'upload',
-        access_mode: 'public'
-      });
-    }
-
-    res.status(200).json({
+    res.json({
       success: true,
-      message: 'PDF is now public',
-      url: property.agreementUrl
+      message: `Found ${properties.length} properties with agreements. Cloudinary fix not needed - using Supabase now!`,
+      properties: properties.map(p => ({
+        title: p.title,
+        agreementUrl: p.agreementUrl
+      }))
     });
-
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ⭐⭐⭐ END ADMIN ROUTES ⭐⭐⭐
-
-// ------------------- GET all properties -------------------
+// ========================================
+// GET all properties
+// ========================================
 router.get('/', async (req, res) => {
   try {
     const {
@@ -582,7 +234,9 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ------------------- GET single property by ID -------------------
+// ========================================
+// GET single property by ID
+// ========================================
 router.get('/:id', async (req, res) => {
   try {
     const property = await Property.findById(req.params.id);
@@ -608,7 +262,9 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// ------------------- POST create new property -------------------
+// ========================================
+// POST create new property
+// ========================================
 router.post('/', upload.array('images', 10), async (req, res) => {
   try {
     const {
@@ -640,15 +296,20 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       });
     }
 
+    // ✅ Upload images to Supabase
     const imageUrls = [];
     if (req.files && req.files.length > 0) {
-      console.log(`📸 Uploading ${req.files.length} images...`);
+      console.log(`📸 Uploading ${req.files.length} images to Supabase...`);
       for (const file of req.files) {
         try {
-          const url = await uploadToCloudinary(file.path);
+          const url = await uploadImageToSupabase(file.path);
           imageUrls.push(url);
         } catch (uploadError) {
           console.error('Failed to upload image:', uploadError);
+          // Clean up failed file
+          if (fs.existsSync(file.path)) {
+            fs.unlinkSync(file.path);
+          }
         }
       }
     }
@@ -688,7 +349,7 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       const owner = await User.findById(ownerId);
       if (owner && owner.tempPropertyPayment) {
         const tempPayment = owner.tempPropertyPayment;
-        
+
         if (new Date() < tempPayment.expiresAt) {
           property.servicePaymentHistory = [{
             amount: tempPayment.amount,
@@ -698,7 +359,7 @@ router.post('/', upload.array('images', 10), async (req, res) => {
             status: 'completed',
             paidAt: tempPayment.paidAt,
           }];
-          
+
           await User.findByIdAndUpdate(ownerId, {
             $unset: { tempPropertyPayment: 1 }
           });
@@ -718,6 +379,7 @@ router.post('/', upload.array('images', 10), async (req, res) => {
   } catch (error) {
     console.error('❌ Error creating property:', error);
 
+    // Clean up any remaining temp files
     if (req.files) {
       req.files.forEach((file) => {
         if (fs.existsSync(file.path)) {
@@ -734,7 +396,9 @@ router.post('/', upload.array('images', 10), async (req, res) => {
   }
 });
 
-// ------------------- PUT update property -------------------
+// ========================================
+// PUT update property
+// ========================================
 router.put('/:id', upload.array('images', 10), async (req, res) => {
   try {
     const property = await Property.findById(req.params.id);
@@ -790,14 +454,19 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
       property.monthlyServiceCharge = property.calculateServiceCharge();
     }
 
+    // ✅ Upload new images to Supabase
     if (req.files && req.files.length > 0) {
+      console.log(`📸 Uploading ${req.files.length} new images to Supabase...`);
       const newImageUrls = [];
       for (const file of req.files) {
         try {
-          const url = await uploadToCloudinary(file.path);
+          const url = await uploadImageToSupabase(file.path);
           newImageUrls.push(url);
         } catch (uploadError) {
           console.error('Failed to upload image:', uploadError);
+          if (fs.existsSync(file.path)) {
+            fs.unlinkSync(file.path);
+          }
         }
       }
       property.images = [...property.images, ...newImageUrls];
@@ -829,7 +498,9 @@ router.put('/:id', upload.array('images', 10), async (req, res) => {
   }
 });
 
-// ------------------- DELETE property -------------------
+// ========================================
+// DELETE property
+// ========================================
 router.delete('/:id', async (req, res) => {
   try {
     const property = await Property.findById(req.params.id);
@@ -861,7 +532,9 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// ------------------- GET properties by owner -------------------
+// ========================================
+// GET properties by owner
+// ========================================
 router.get('/owner/:ownerId', async (req, res) => {
   try {
     const properties = await Property.find({
@@ -883,5 +556,44 @@ router.get('/owner/:ownerId', async (req, res) => {
   }
 });
 
+// ========================================
+// SERVICE CHARGE ROUTES
+// ========================================
+router.post('/:id/service-payment', async (req, res) => {
+  try {
+    const { amount, monthsPaid, paymentId, orderId } = req.body;
+
+    const property = await Property.findById(req.params.id);
+    if (!property) {
+      return res.status(404).json({ success: false, message: 'Property not found' });
+    }
+
+    await property.recordPayment({ amount, monthsPaid, paymentId, orderId });
+
+    res.json({ success: true, message: 'Payment recorded', data: property });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/:id/service-status', async (req, res) => {
+  try {
+    const property = await Property.findById(req.params.id);
+    if (!property) {
+      return res.status(404).json({ success: false, message: 'Property not found' });
+    }
+
+    const status = property.getPaymentStatus();
+    res.json({
+      success: true,
+      status,
+      serviceDueDate: property.serviceDueDate,
+      monthlyServiceCharge: property.monthlyServiceCharge,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 module.exports = router;
-module.exports.uploadPDFToCloudinary = uploadPDFToCloudinary;
+module.exports.uploadPDFToSupabase = uploadPDFToSupabase;
