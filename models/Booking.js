@@ -161,7 +161,7 @@ const bookingSchema = new mongoose.Schema(
         monthsPaid: {
           type: Number,
           default: 1,
-          min: 1
+          min: 0          // ⭐ Changed from min:1 to min:0 (dues have monthsPaid=0)
         },
 
         convenienceFee: {
@@ -172,21 +172,47 @@ const bookingSchema = new mongoose.Schema(
 
         paymentId: {
           type: String,
-          required: true
+          default: ''     // ⭐ Changed from required:true to default:''
         },
 
         orderId: {
           type: String,
-          required: true
+          default: ''     // ⭐ Changed from required:true to default:''
         },
 
         paidAt: {
           type: Date,
           default: Date.now
+        },
+
+        // ⭐ NEW FIELDS for owner-added dues
+        status: {
+          type: String,
+          enum: ['paid', 'pending', 'failed'],
+          default: 'paid'
+        },
+
+        reason: {
+          type: String,
+          default: null
+        },
+
+        dueDate: {
+          type: Date,
+          default: null
+        },
+
+        month: {
+          type: String,
+          default: null
+        },
+
+        addedByOwner: {
+          type: Boolean,
+          default: false
         }
       }
     ],
-
     // -------------------- Tenant Documents --------------------
     tenantDocuments: {
       type: Map,
