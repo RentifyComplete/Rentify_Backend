@@ -1407,5 +1407,41 @@ router.get('/debug/all-bookings', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+// POST /api/payments/verify-due-payment
+router.post('/verify-due-payment', async (req, res) => {
+  try {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, bookingId, dueId, amount } = req.body;
 
+    // Verify signature
+    const sign = razorpay_order_id + '|' + razorpay_payment_id;
+    const expectedSign = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(sign).digest('hex');
+
+    if (razorpay_signature !== expectedSign) {
+      return res.status(400).json({ success: false, message: 'Invalid signature' });
+    }
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+    // ⭐ Find the pending due in rentPaymentHistory and mark it paid
+    const due = booking.rentPaymentHistory.id(dueId);
+    if (due) {
+      due.status = 'paid';
+      due.paidAt = new Date();
+      due.paymentId = razorpay_payment_id;
+      due.orderId = razorpay_order_id;
+    }
+
+    // ⭐ Reduce pendingDues
+    booking.pendingDues = Math.max(0, (booking.pendingDues || 0) - Number(amount));
+    await booking.save();
+
+    return res.status(200).json({ success: true, message: 'Due payment verified' });
+  } catch (error) {
+    console.error('❌ Error verifying due payment:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
 module.exports = router;
