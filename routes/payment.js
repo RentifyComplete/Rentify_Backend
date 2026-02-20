@@ -151,10 +151,13 @@ router.get('/tenant/:email', async (req, res) => {
             convenienceFee: Number(payment.convenienceFee || 0),
             date: paymentDate,
             paidOn: paymentDate,
-            status: 'paid',
+            status: payment.status === 'pending' ? 'Pending' : 'Paid',
             method: 'Razorpay',
             transactionId: payment.paymentId || '',
             razorpayOrderId: payment.orderId || '',
+            reason: payment.reason || null,
+            dueDate: payment.dueDate || null,
+            addedByOwner: payment.addedByOwner || false,
             month: new Date(paymentDate).toLocaleDateString('en-US', { 
               month: 'long', 
               year: 'numeric' 
@@ -188,6 +191,107 @@ router.get('/tenant/:email', async (req, res) => {
       success: false,
       message: 'Failed to fetch payment history',
       error: error.message
+    });
+  }
+});
+// ⭐ POST /api/payments/add-dues (Owner adds dues for tenant)
+router.post('/add-dues', async (req, res) => {
+  try {
+    const {
+      tenantEmail,
+      tenantName,
+      amount,
+      reason,
+      status,
+      month,
+      dueDate,
+      propertyId,
+      bookingId,
+    } = req.body;
+
+    console.log('💳 ==================== ADD DUES ====================');
+    console.log('Tenant Email:', tenantEmail);
+    console.log('Amount:', amount);
+    console.log('Reason:', reason);
+    console.log('Booking ID:', bookingId);
+
+    if (!tenantEmail || !amount || !reason) {
+      return res.status(400).json({
+        success: false,
+        message: 'tenantEmail, amount, and reason are required',
+      });
+    }
+
+    if (isNaN(amount) || Number(amount) <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount must be a positive number',
+      });
+    }
+
+    // ⭐ Add due entry into the booking's rentPaymentHistory with Pending status
+    // AND update pendingDues on the Booking document
+    let booking = null;
+
+    if (bookingId) {
+      booking = await Booking.findById(bookingId);
+    }
+
+    // Fallback: find by tenantEmail if bookingId not found
+    if (!booking && tenantEmail) {
+      booking = await Booking.findOne({
+        tenantEmail: tenantEmail.trim().toLowerCase(),
+        status: { $ne: 'cancelled' },
+      });
+    }
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'No active booking found for this tenant',
+      });
+    }
+
+    console.log('📋 Found booking:', booking._id, 'for tenant:', booking.tenantEmail);
+
+    // ⭐ Add to rentPaymentHistory as a pending due
+    const dueEntry = {
+      amount: Number(amount),
+      monthsPaid: 0,               // 0 = not a rent payment, it's a due
+      convenienceFee: 0,
+      paymentId: `due_${Date.now()}`,
+      orderId: '',
+      paidAt: new Date(),
+      status: 'pending',
+      reason: reason,
+      month: month || new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+      dueDate: dueDate ? new Date(dueDate) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      addedByOwner: true,
+    };
+
+    booking.rentPaymentHistory.push(dueEntry);
+
+    // ⭐ Increment pendingDues so it shows on the owner's tenant card
+    booking.pendingDues = (booking.pendingDues || 0) + Number(amount);
+
+    await booking.save();
+
+    console.log('✅ Due added successfully');
+    console.log('💰 New pendingDues:', booking.pendingDues);
+    console.log('💳 ==================== ADD DUES SUCCESS ====================\n');
+
+    return res.status(201).json({
+      success: true,
+      message: 'Due added successfully',
+      pendingDues: booking.pendingDues,
+      dueEntry: dueEntry,
+    });
+
+  } catch (error) {
+    console.error('❌ Error adding dues:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error',
     });
   }
 });
