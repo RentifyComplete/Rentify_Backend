@@ -130,45 +130,75 @@ router.get('/tenant/:email', async (req, res) => {
         }
       }
       
-      if (booking.rentPaymentHistory && booking.rentPaymentHistory.length > 0) {
-        booking.rentPaymentHistory.forEach((payment, index) => {
-          console.log(`   💰 Payment ${index + 1}:`, {
-            amount: payment.amount,
-            paidAt: payment.paidAt,
-            paymentId: payment.paymentId
-          });
-          
-          const paymentDate = payment.paidAt || payment.createdAt || booking.createdAt;
-          
-          allPayments.push({
-            _id: payment._id || payment.paymentId,
-            bookingId: booking._id.toString(),
-            propertyId: booking.propertyId,
-            propertyTitle: propertyTitle,
-            propertyAddress: propertyAddress,
-            amount: Number(payment.amount || 0),
-            monthsPaid: Number(payment.monthsPaid || 1),
-            convenienceFee: Number(payment.convenienceFee || 0),
-            date: paymentDate,
-            paidOn: paymentDate,
-            status: payment.status === 'pending' ? 'Pending' : 'Paid',
-            method: 'Razorpay',
-            transactionId: payment.paymentId || '',
-            razorpayOrderId: payment.orderId || '',
-            reason: payment.reason || null,
-            dueDate: payment.dueDate || null,
-            addedByOwner: payment.addedByOwner || false,
-            month: new Date(paymentDate).toLocaleDateString('en-US', { 
-              month: 'long', 
-              year: 'numeric' 
-            }),
-          });
-          
-          totalAmount += Number(payment.amount || 0);
-        });
-      } else {
-        console.log('   ⚠️ No payment history found for this booking');
-      }
+      // ⭐ First payment (initial booking payment - stored on booking itself)
+if (booking.paymentId && booking.paymentId !== 'owner_added') {
+  const firstPaymentDate = booking.moveInDate || booking.createdAt;
+  allPayments.push({
+    _id: booking.paymentId,
+    bookingId: booking._id.toString(),
+    propertyId: booking.propertyId,
+    propertyTitle: propertyTitle,
+    propertyAddress: propertyAddress,
+    amount: Number(booking.monthlyRent + booking.securityDeposit || 0),
+    monthsPaid: 1,
+    convenienceFee: Number(booking.convenienceFee || 0),
+    date: firstPaymentDate,
+    paidOn: firstPaymentDate,
+    status: 'paid',
+    method: 'Razorpay',
+    transactionId: booking.paymentId || '',
+    razorpayOrderId: booking.orderId || '',
+    month: new Date(firstPaymentDate).toLocaleDateString('en-US', {
+      month: 'long',
+      year: 'numeric',
+    }),
+    isFirstPayment: true,
+  });
+  totalAmount += Number(booking.monthlyRent + booking.securityDeposit || 0);
+}
+
+// ⭐ Subsequent rent payments (stored in rentPaymentHistory)
+if (booking.rentPaymentHistory && booking.rentPaymentHistory.length > 0) {
+  booking.rentPaymentHistory.forEach((payment, index) => {
+    console.log(`   💰 Payment ${index + 1}:`, {
+      amount: payment.amount,
+      paidAt: payment.paidAt,
+      paymentId: payment.paymentId,
+      status: payment.status,
+    });
+
+    const paymentDate = payment.paidAt || payment.createdAt || booking.createdAt;
+
+    allPayments.push({
+      _id: payment._id || payment.paymentId,
+      bookingId: booking._id.toString(),
+      propertyId: booking.propertyId,
+      propertyTitle: propertyTitle,
+      propertyAddress: propertyAddress,
+      amount: Number(payment.amount || 0),
+      monthsPaid: Number(payment.monthsPaid || 1),
+      convenienceFee: Number(payment.convenienceFee || 0),
+      date: paymentDate,
+      paidOn: paymentDate,
+      // ⭐ Use status from DB (handles pending dues added by owner)
+      status: payment.status === 'pending' ? 'Pending' : 'paid',
+      method: payment.addedByOwner ? 'Added by Owner' : 'Razorpay',
+      transactionId: payment.paymentId || '',
+      razorpayOrderId: payment.orderId || '',
+      month: payment.month || new Date(paymentDate).toLocaleDateString('en-US', {
+        month: 'long',
+        year: 'numeric',
+      }),
+      reason: payment.reason || null,
+      dueDate: payment.dueDate || null,
+      addedByOwner: payment.addedByOwner || false,
+    });
+
+    totalAmount += Number(payment.amount || 0);
+  });
+} else {
+  console.log('   ⚠️ No subsequent payment history for this booking');
+}
     }
     
     allPayments.sort((a, b) => new Date(b.date) - new Date(a.date));
