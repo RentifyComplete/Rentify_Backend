@@ -3,6 +3,7 @@
 // FINAL SERVER.JS - WITH SUBSCRIPTION CRON JOB
 // ✅ Includes property status checking
 // ✅ Auto-suspend overdue properties
+// ✅ Property view tracking for Lead Tracker
 // ========================================
 
 const express = require('express');
@@ -11,7 +12,7 @@ const cors = require('cors');
 const fs = require('fs');
 require('dotenv').config();
 
-// ⭐ NEW: Import property status cron job
+// ⭐ Import property status cron job
 const { startPropertyStatusCron, runPropertyStatusCheck } = require('./utils/propertyStatusCron');
 
 const app = express();
@@ -33,8 +34,8 @@ mongoose
   .connect(process.env.MONGO_URI)
   .then(() => {
     console.log('✅ Connected to MongoDB');
-    
-    // ⭐ NEW: Start property status cron job after DB connection
+
+    // Start property status cron job after DB connection
     console.log('🕒 Starting property status monitoring...');
     startPropertyStatusCron();
   })
@@ -45,7 +46,7 @@ mongoose
 
 // ------------------- Health Check Route -------------------
 app.get('/', (req, res) => {
-  res.json({ 
+  res.json({
     success: true,
     message: 'Rentify API is running',
     timestamp: new Date().toISOString(),
@@ -55,7 +56,8 @@ app.get('/', (req, res) => {
       'Payment Processing',
       'Booking System',
       'Monthly Subscription (Auto-renewal)',
-      'Property Status Monitoring (Cron Job)'
+      'Property Status Monitoring (Cron Job)',
+      'Property View Tracking (Lead Tracker)',
     ],
     routes: [
       'GET /',
@@ -64,10 +66,13 @@ app.get('/', (req, res) => {
       'POST /api/auth/*',
       'POST /api/payments/*',
       'POST /api/bookings/*',
+      'POST /api/booking-requests/*',
+      'POST /api/property-views/record',
+      'GET  /api/property-views/owner/:ownerId',
       'GET /api/payments/service-status/:propertyId',
       'GET /api/payments/owner-service-status/:ownerId',
-      'GET /api/admin/check-property-status (Manual trigger)'
-    ]
+      'GET /api/admin/check-property-status (Manual trigger)',
+    ],
   });
 });
 
@@ -84,13 +89,14 @@ app.use('/api/properties', propertyRoutes);
 const bookingRoutes = require('./routes/booking');
 app.use('/api/bookings', bookingRoutes);
 
-// Add this import
 const bookingRequestRoutes = require('./routes/booking-request');
-
-// Add this route registration
 app.use('/api/booking-requests', bookingRequestRoutes);
 
-// ⭐ NEW: Admin endpoint to manually trigger property status check
+// ⭐ NEW: Property view tracking (for Lead Tracker "Viewed" section)
+const propertyViewRoutes = require('./routes/property-views');
+app.use('/api/property-views', propertyViewRoutes);
+
+// ------------------- Admin: Manual property status check -------------------
 app.get('/api/admin/check-property-status', async (req, res) => {
   try {
     console.log('🔧 Manual property status check triggered...');
@@ -98,14 +104,14 @@ app.get('/api/admin/check-property-status', async (req, res) => {
     res.json({
       success: true,
       message: 'Property status check completed',
-      ...result
+      ...result,
     });
   } catch (error) {
     console.error('❌ Manual check failed:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: 'Failed to run property status check',
-      error: error.message 
+      error: error.message,
     });
   }
 });
@@ -115,7 +121,7 @@ app.use((req, res) => {
   console.log(`❌ 404 - Route not found: ${req.method} ${req.url}`);
   res.status(404).json({
     success: false,
-    message: `Route not found: ${req.method} ${req.url}`
+    message: `Route not found: ${req.method} ${req.url}`,
   });
 });
 
@@ -125,17 +131,16 @@ app.use((err, req, res, next) => {
   res.status(500).json({
     success: false,
     message: 'Internal server error',
-    error: err.message
+    error: err.message,
   });
 });
 
-// ------------------- Create Uploads Directory -------------------
+// ------------------- Create Required Directories -------------------
 if (!fs.existsSync('uploads')) {
   fs.mkdirSync('uploads');
   console.log('📁 Created uploads directory');
 }
 
-// ⭐ NEW: Create utils directory if it doesn't exist
 if (!fs.existsSync('utils')) {
   fs.mkdirSync('utils');
   console.log('📁 Created utils directory');
@@ -156,17 +161,17 @@ app.listen(PORT, () => {
   console.log('  - Booking System');
   console.log('  - Monthly Subscription');
   console.log('  - Auto-suspend Overdue Properties');
+  console.log('  - Property View Tracking (Lead Tracker)');
   console.log('\n📋 Manual Trigger:');
   console.log(`  GET http://localhost:${PORT}/api/admin/check-property-status`);
   console.log('========================================\n');
 });
 
-// ⭐ NEW: Graceful shutdown
-// NEW (CORRECT):
+// ------------------- Graceful Shutdown -------------------
 process.on('SIGTERM', async () => {
   console.log('⚠️  SIGTERM received. Shutting down gracefully...');
   try {
-    await mongoose.connection.close(); // ✅ No callback, use await
+    await mongoose.connection.close();
     console.log('✅ MongoDB connection closed');
     process.exit(0);
   } catch (error) {
@@ -178,7 +183,7 @@ process.on('SIGTERM', async () => {
 process.on('SIGINT', async () => {
   console.log('⚠️  SIGINT received. Shutting down gracefully...');
   try {
-    await mongoose.connection.close(); // ✅ No callback, use await
+    await mongoose.connection.close();
     console.log('✅ MongoDB connection closed');
     process.exit(0);
   } catch (error) {
