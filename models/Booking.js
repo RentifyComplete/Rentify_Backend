@@ -56,8 +56,7 @@ const bookingSchema = new mongoose.Schema(
       default: '',
       trim: true
     },
-    
-    // ⭐ ADD THESE TWO FIELDS
+
     roomNumber: {
       type: String,
       default: null,
@@ -104,6 +103,12 @@ const bookingSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 1
+    },
+
+    // ⭐ NEW: tracks when the lease itself ends, separate from rentDueDate
+    leaseEndDate: {
+      type: Date,
+      default: null
     },
 
     notes: {
@@ -161,7 +166,7 @@ const bookingSchema = new mongoose.Schema(
         monthsPaid: {
           type: Number,
           default: 1,
-          min: 0          // ⭐ Changed from min:1 to min:0 (dues have monthsPaid=0)
+          min: 0
         },
 
         convenienceFee: {
@@ -172,12 +177,12 @@ const bookingSchema = new mongoose.Schema(
 
         paymentId: {
           type: String,
-          default: ''     // ⭐ Changed from required:true to default:''
+          default: ''
         },
 
         orderId: {
           type: String,
-          default: ''     // ⭐ Changed from required:true to default:''
+          default: ''
         },
 
         paidAt: {
@@ -185,7 +190,6 @@ const bookingSchema = new mongoose.Schema(
           default: Date.now
         },
 
-        // ⭐ NEW FIELDS for owner-added dues
         status: {
           type: String,
           enum: ['paid', 'pending', 'failed'],
@@ -237,13 +241,11 @@ const bookingSchema = new mongoose.Schema(
     toJSON: {
       virtuals: true,
       transform(doc, ret) {
-        // ✅ FIX: Safe Map → Object conversion with null checks
         if (ret.tenantDocuments) {
           try {
             if (ret.tenantDocuments instanceof Map) {
               ret.tenantDocuments = Object.fromEntries(ret.tenantDocuments);
             } else if (typeof ret.tenantDocuments === 'object') {
-              // Already an object, keep as is
               ret.tenantDocuments = ret.tenantDocuments;
             } else {
               ret.tenantDocuments = {};
@@ -262,13 +264,11 @@ const bookingSchema = new mongoose.Schema(
     toObject: {
       virtuals: true,
       transform(doc, ret) {
-        // ✅ FIX: Safe Map → Object conversion with null checks
         if (ret.tenantDocuments) {
           try {
             if (ret.tenantDocuments instanceof Map) {
               ret.tenantDocuments = Object.fromEntries(ret.tenantDocuments);
             } else if (typeof ret.tenantDocuments === 'object') {
-              // Already an object, keep as is
               ret.tenantDocuments = ret.tenantDocuments;
             } else {
               ret.tenantDocuments = {};
@@ -310,9 +310,14 @@ bookingSchema.methods.recordRentPayment = async function (paymentData) {
 
   this.lastRentPayment = new Date();
 
-  const baseDate = this.rentDueDate || new Date();
+  // ⭐ FIX: if the stored due date is already in the past (overdue tenant),
+  // extend from today instead of stacking on top of a stale past date.
+  const now = new Date();
+  const currentDueDate = this.rentDueDate || now;
+  const baseDate = currentDueDate > now ? currentDueDate : now;
+
   const newDueDate = new Date(baseDate);
-  newDueDate.setMonth(newDueDate.getMonth() + monthsPaid);
+  newDueDate.setMonth(newDueDate.getMonth() + Number(monthsPaid));
 
   this.rentDueDate = newDueDate;
   this.pendingDues = 0;
@@ -363,7 +368,7 @@ bookingSchema.methods.removeDocument = async function (key) {
 
 bookingSchema.methods.getDocuments = function () {
   if (!this.tenantDocuments) return {};
-  
+
   try {
     if (this.tenantDocuments instanceof Map) {
       return Object.fromEntries(this.tenantDocuments);
