@@ -27,12 +27,6 @@ async function getTenantIdByEmail(email) {
 // =======================================================
 // CREATE BOOKING
 // =======================================================
-// ============================================================
-// QUICK FIX: Add these lines to your existing routes/bookings.js
-// ============================================================
-
-// Find your createBookingHandler function and update it like this:
-
 const createBookingHandler = async (req, res) => {
   try {
     const {
@@ -50,7 +44,7 @@ const createBookingHandler = async (req, res) => {
       orderId,
       paymentId,
       notes,
-      requestId // ⭐ ADD THIS: Flutter will send the approved request ID
+      requestId
     } = req.body;
 
     console.log('📥 Create booking request:', {
@@ -58,10 +52,9 @@ const createBookingHandler = async (req, res) => {
       tenantId,
       tenantEmail,
       tenantName,
-      requestId // ⭐ LOG THIS
+      requestId
     });
 
-    // ⭐⭐⭐ ADD THIS SECTION - Fetch room info from approved request ⭐⭐⭐
     let roomNumber = null;
     let occupancyType = 'Single';
 
@@ -86,9 +79,7 @@ const createBookingHandler = async (req, res) => {
     } else {
       console.log('⚠️ No requestId provided, room fields will be null');
     }
-    // ⭐⭐⭐ END OF NEW SECTION ⭐⭐⭐
 
-    // ✅ Validate required fields
     if (!propertyId || !tenantEmail || !orderId || !paymentId) {
       return res.status(400).json({
         success: false,
@@ -96,7 +87,6 @@ const createBookingHandler = async (req, res) => {
       });
     }
 
-    // ✅ Verify property exists
     const property = await Property.findById(propertyId);
     if (!property) {
       return res.status(404).json({
@@ -105,7 +95,6 @@ const createBookingHandler = async (req, res) => {
       });
     }
 
-    // ✅ Check for duplicate active booking
     const existing = await Booking.findOne({
       propertyId,
       tenantEmail: tenantEmail.toLowerCase(),
@@ -119,7 +108,6 @@ const createBookingHandler = async (req, res) => {
       });
     }
 
-    // ✅ Resolve tenantId from email if not provided
     let properTenantId = null;
     if (tenantId && mongoose.Types.ObjectId.isValid(tenantId)) {
       properTenantId = tenantId;
@@ -131,10 +119,15 @@ const createBookingHandler = async (req, res) => {
 
     // ✅ Calculate dates
     const moveIn = moveInDate ? new Date(moveInDate) : new Date();
-    const dueDate = new Date(moveIn);
-    dueDate.setMonth(dueDate.getMonth() + Number(leaseDuration || 1));
 
-    // ✅ Create booking WITH room fields
+    // Rent is due monthly, one month from move-in — independent of lease length
+    const dueDate = new Date(moveIn);
+    dueDate.setMonth(dueDate.getMonth() + 1);
+
+    // Lease end tracked separately from rent due date
+    const leaseEndDate = new Date(moveIn);
+    leaseEndDate.setMonth(leaseEndDate.getMonth() + Number(leaseDuration || 11));
+
     const booking = await Booking.create({
       propertyId,
       ownerId: property.ownerId,
@@ -154,12 +147,12 @@ const createBookingHandler = async (req, res) => {
 
       moveInDate: moveIn,
       leaseDuration: Number(leaseDuration),
+      leaseEndDate: leaseEndDate,
 
       orderId,
       paymentId,
       notes: notes || '',
 
-      // ⭐⭐⭐ ADD THESE TWO LINES ⭐⭐⭐
       roomNumber: roomNumber,
       occupancyType: occupancyType,
 
@@ -171,8 +164,8 @@ const createBookingHandler = async (req, res) => {
     });
 
     console.log('✅ Booking created:', booking._id);
-    console.log('🚪 Room Number:', booking.roomNumber); // ⭐ LOG
-    console.log('👥 Occupancy Type:', booking.occupancyType); // ⭐ LOG
+    console.log('🚪 Room Number:', booking.roomNumber);
+    console.log('👥 Occupancy Type:', booking.occupancyType);
 
     res.status(201).json({
       success: true,
@@ -190,9 +183,9 @@ const createBookingHandler = async (req, res) => {
   }
 };
 
-// Don't forget to keep these lines at the end:
 router.post('/', createBookingHandler);
 router.post('/create', createBookingHandler);
+
 // =======================================================
 // UPDATE BOOKING - WITH MAP DOCUMENT HANDLING
 // =======================================================
@@ -211,12 +204,10 @@ const updateBookingHandler = async (req, res) => {
       });
     }
 
-    // ✅ Handle tenant documents separately (Map type)
     if (req.body.tenantDocuments) {
       console.log('📄 Updating documents:', req.body.tenantDocuments);
       
       try {
-        // Use the model's updateDocuments method for safe Map handling
         await booking.updateDocuments(req.body.tenantDocuments);
         console.log('✅ Documents updated successfully');
       } catch (docError) {
@@ -229,14 +220,13 @@ const updateBookingHandler = async (req, res) => {
       }
     }
 
-    // ✅ Update other fields (exclude protected fields)
     const protectedFields = [
-      'tenantDocuments', // Already handled above
+      'tenantDocuments',
       '_id',
-      'tenantId',        // Never update from request
-      'ownerId',         // Never update from request
-      'propertyId',      // Never update from request
-      'createdAt'        // Mongoose handles this
+      'tenantId',
+      'ownerId',
+      'propertyId',
+      'createdAt'
     ];
 
     Object.keys(req.body).forEach((key) => {
