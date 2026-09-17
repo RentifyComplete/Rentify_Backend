@@ -233,8 +233,30 @@ const bookingSchema = new mongoose.Schema(
     bookingDate: {
       type: Date,
       default: Date.now
-    }
+    },
+    // -------------------- Tenant Documents --------------------
+  tenantDocuments: {
+    type: Map,
+    of: String,
+    default: {}
   },
+
+  documentsUploadedAt: {
+    type: Date,
+    default: null
+  },
+
+// ⭐ NEW: per-tenancy agreement (separate from Property.agreementUrl)
+  agreementUrl: {
+    type: String,
+    default: null
+  },
+
+  agreementGeneratedAt: {
+    type: Date,
+    default: null
+  }
+},
   {
     timestamps: true,
 
