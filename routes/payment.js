@@ -1,5 +1,6 @@
 // routes/payment.js
 // ⭐ COMPLETE FIXED VERSION - All Payment Types Working
+// ⭐ NEW: In-app payment reminder notification routes at the bottom
 const express = require('express');
 const router = express.Router();
 const Razorpay = require('razorpay');
@@ -7,6 +8,7 @@ const crypto = require('crypto');
 const User = require('../models/user');
 const Property = require('../models/Property');
 const Booking = require('../models/Booking');
+const Notification = require('../models/Notification'); // ⭐ NEW
 
 // ========================================
 // RAZORPAY INITIALIZATION
@@ -79,23 +81,23 @@ const TENANT_RENT_PRICING = {
 router.get('/tenant/:email', async (req, res) => {
   try {
     const { email } = req.params;
-    
+
     console.log('📜 ==================== TENANT PAYMENT HISTORY ====================');
     console.log('📧 Tenant Email:', email);
-    
+
     if (!email || email.trim() === '') {
       return res.status(400).json({
         success: false,
         message: 'Email parameter is required'
       });
     }
-    
-    const bookings = await Booking.find({ 
+
+    const bookings = await Booking.find({
       tenantEmail: email.trim().toLowerCase()
     }).sort({ createdAt: -1 });
-    
+
     console.log('📋 Found', bookings.length, 'bookings for tenant');
-    
+
     if (bookings.length === 0) {
       console.log('⚠️ No bookings found for:', email);
       return res.json({
@@ -106,18 +108,18 @@ router.get('/tenant/:email', async (req, res) => {
         message: 'No bookings found for this tenant'
       });
     }
-    
+
     const allPayments = [];
     let totalAmount = 0;
-    
+
     for (const booking of bookings) {
       console.log(`📦 Processing booking ${booking._id}:`);
       console.log(`   - Property: ${booking.propertyTitle || booking.propertyId}`);
       console.log(`   - Payments in history: ${booking.rentPaymentHistory?.length || 0}`);
-      
+
       let propertyTitle = booking.propertyTitle || 'Property';
       let propertyAddress = booking.propertyAddress || '';
-      
+
       if (!booking.propertyTitle && booking.propertyId) {
         try {
           const property = await Property.findById(booking.propertyId);
@@ -129,7 +131,7 @@ router.get('/tenant/:email', async (req, res) => {
           console.log('⚠️ Could not fetch property details:', err.message);
         }
       }
-      
+
       // ⭐ First payment (initial booking payment - stored on booking itself)
 if (booking.paymentId && booking.paymentId !== 'owner_added') {
   const firstPaymentDate = booking.moveInDate || booking.createdAt;
@@ -200,20 +202,20 @@ if (booking.rentPaymentHistory && booking.rentPaymentHistory.length > 0) {
   console.log('   ⚠️ No subsequent payment history for this booking');
 }
     }
-    
+
     allPayments.sort((a, b) => new Date(b.date) - new Date(a.date));
-    
+
     console.log('✅ Total payments found:', allPayments.length);
     console.log('💰 Total amount:', totalAmount);
     console.log('📜 ==================== HISTORY SUCCESS ====================\n');
-    
+
     res.json({
       success: true,
       payments: allPayments,
       totalPayments: allPayments.length,
       totalAmount: totalAmount
     });
-    
+
   } catch (error) {
     console.error('❌ Error fetching tenant payment history:', error);
     console.error('Stack:', error.stack);
@@ -330,36 +332,36 @@ router.post('/add-dues', async (req, res) => {
 router.post('/create-tenant-rent-order', async (req, res) => {
   try {
     const { bookingId, propertyId, monthsDuration, couponCode } = req.body;
-    
+
     console.log('💰 ==================== TENANT RENT ORDER ====================');
     console.log('Booking ID:', bookingId);
     console.log('Property ID:', propertyId);
     console.log('Months Duration:', monthsDuration);
     console.log('Coupon Code:', couponCode || 'None');
-    
+
     if (!bookingId || !propertyId || !monthsDuration) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields: bookingId, propertyId, monthsDuration'
       });
     }
-    
+
     if (![1, 3, 6, 12].includes(parseInt(monthsDuration))) {
       return res.status(400).json({
         success: false,
         message: 'Invalid duration. Must be 1, 3, 6, or 12 months'
       });
     }
-    
+
     const booking = await Booking.findById(bookingId);
-    
+
     if (!booking) {
       return res.status(404).json({
         success: false,
         message: 'Booking not found'
       });
     }
-    
+
     const pricing = TENANT_RENT_PRICING[monthsDuration];
     const monthlyRent = booking.monthlyRent;
     const baseAmount = monthlyRent * pricing.months;
@@ -367,7 +369,7 @@ router.post('/create-tenant-rent-order', async (req, res) => {
     const afterDurationDiscount = baseAmount - durationDiscount;
     const convenienceFee = Math.round((afterDurationDiscount * 2.7) / 100);
     let finalAmount = afterDurationDiscount + convenienceFee;
-    
+
     console.log('💵 Calculation:');
     console.log('   Monthly Rent: ₹' + monthlyRent);
     console.log('   Months: ' + pricing.months);
@@ -376,9 +378,9 @@ router.post('/create-tenant-rent-order', async (req, res) => {
     console.log('   After Discount: ₹' + afterDurationDiscount);
     console.log('   Convenience Fee (2.7%): +₹' + convenienceFee);
     console.log('   Final Amount: ₹' + finalAmount);
-    
+
     const couponResult = validateAndApplyCoupon(finalAmount, couponCode);
-    
+
     if (!couponResult.valid) {
       return res.status(400).json({
         success: false,
@@ -391,9 +393,9 @@ router.post('/create-tenant-rent-order', async (req, res) => {
       finalAmount = couponResult.finalAmount;
       console.log('💰 New Final Amount: ₹' + finalAmount);
     }
-    
+
     const amountInPaise = Math.round(finalAmount * 100);
-    
+
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: 'INR',
@@ -413,10 +415,10 @@ router.post('/create-tenant-rent-order', async (req, res) => {
         finalAmount: finalAmount,
       },
     });
-    
+
     console.log('✅ Order created:', order.id);
     console.log('💰 ==================== ORDER SUCCESS ====================\n');
-    
+
     res.status(200).json({
       success: true,
       orderId: order.id,
@@ -431,7 +433,7 @@ router.post('/create-tenant-rent-order', async (req, res) => {
       currency: 'INR',
       key: process.env.RAZORPAY_KEY_ID,
     });
-    
+
   } catch (error) {
     console.error('❌ Error creating tenant rent order:', error);
     res.status(500).json({
@@ -445,44 +447,44 @@ router.post('/create-tenant-rent-order', async (req, res) => {
 // VERIFY TENANT RENT PAYMENT
 router.post('/verify-tenant-rent-payment', async (req, res) => {
   try {
-    const { 
-      razorpay_order_id, 
-      razorpay_payment_id, 
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
       razorpay_signature,
       bookingId,
-      monthsDuration 
+      monthsDuration
     } = req.body;
-    
+
     console.log('🔍 ==================== VERIFY RENT PAYMENT ====================');
     console.log('Order ID:', razorpay_order_id);
     console.log('Payment ID:', razorpay_payment_id);
     console.log('Booking ID:', bookingId);
     console.log('Months Duration:', monthsDuration);
-    
+
     // Verify signature
     const sign = razorpay_order_id + '|' + razorpay_payment_id;
     const expectedSign = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(sign.toString())
       .digest('hex');
-    
+
     if (razorpay_signature !== expectedSign) {
       console.error('❌ Invalid payment signature');
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid signature' 
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid signature'
       });
     }
-    
+
     console.log('✅ Payment signature verified');
-    
+
     const payment = await razorpay.payments.fetch(razorpay_payment_id);
     console.log('💳 Payment details from Razorpay:', {
       amount: payment.amount,
       status: payment.status,
       method: payment.method
     });
-    
+
     if (payment.status !== 'captured' && payment.status !== 'authorized') {
       console.error('❌ Payment not successful. Status:', payment.status);
       return res.status(400).json({
@@ -490,22 +492,22 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
         message: 'Payment not completed. Status: ' + payment.status
       });
     }
-    
+
     const booking = await Booking.findById(bookingId);
-    
+
     if (!booking) {
       return res.status(404).json({
         success: false,
         message: 'Booking not found'
       });
     }
-    
+
     console.log('📋 Booking found for tenant:', booking.tenantEmail);
     console.log('📅 Current due date:', booking.rentDueDate);
-    
+
     const monthsDurationInt = parseInt(monthsDuration);
     const pricing = TENANT_RENT_PRICING[monthsDurationInt];
-    
+
     if (!pricing) {
       console.error('❌ Invalid months duration:', monthsDuration);
       return res.status(400).json({
@@ -513,13 +515,13 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
         message: 'Invalid months duration: ' + monthsDuration
       });
     }
-    
+
     const totalAmount = payment.amount / 100;
     const baseAmount = booking.monthlyRent * pricing.months;
     const durationDiscount = Math.round((baseAmount * pricing.discount) / 100);
     const afterDiscount = baseAmount - durationDiscount;
     const convenienceFee = Math.round((afterDiscount * 2.7) / 100);
-    
+
     const paymentData = {
       amount: totalAmount,
       monthsPaid: pricing.months,
@@ -527,9 +529,9 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
       paymentId: razorpay_payment_id,
       orderId: razorpay_order_id
     };
-    
+
     console.log('💾 Recording rent payment:', JSON.stringify(paymentData, null, 2));
-    
+
     try {
       await booking.recordRentPayment(paymentData);
       console.log('✅ Rent payment recorded successfully');
@@ -544,11 +546,11 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
         error: saveError.message
       });
     }
-    
+
     console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       paymentId: razorpay_payment_id,
       verified: true,
       newDueDate: booking.rentDueDate,
@@ -556,13 +558,13 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
       totalPayments: booking.rentPaymentHistory.length,
       message: `Rent paid for ${pricing.months} month(s)`
     });
-    
+
   } catch (error) {
     console.error('❌ Error verifying rent payment:', error);
     console.error('Stack:', error.stack);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
@@ -575,21 +577,21 @@ router.post('/verify-tenant-rent-payment', async (req, res) => {
 router.get('/owner/:ownerId', async (req, res) => {
   try {
     const { ownerId } = req.params;
-    
+
     console.log('📜 ==================== OWNER PAYMENT HISTORY ====================');
     console.log('👤 Owner ID:', ownerId);
-    
+
     if (!ownerId || ownerId.trim() === '') {
       return res.status(400).json({
         success: false,
         message: 'Owner ID parameter is required'
       });
     }
-    
+
     const properties = await Property.find({ ownerId: ownerId.trim() });
-    
+
     console.log('🏠 Found', properties.length, 'properties for owner');
-    
+
     if (properties.length === 0) {
       console.log('⚠️ No properties found for owner:', ownerId);
       return res.json({
@@ -600,15 +602,15 @@ router.get('/owner/:ownerId', async (req, res) => {
         message: 'No properties found for this owner'
       });
     }
-    
+
     const allPayments = [];
     let totalAmount = 0;
-    
+
     for (const property of properties) {
       console.log(`📦 Processing property ${property._id}:`);
       console.log(`   - Title: ${property.title}`);
       console.log(`   - Payments in history: ${property.servicePaymentHistory?.length || 0}`);
-      
+
       if (property.servicePaymentHistory && property.servicePaymentHistory.length > 0) {
         property.servicePaymentHistory.forEach((payment, index) => {
           console.log(`   💰 Payment ${index + 1}:`, {
@@ -617,9 +619,9 @@ router.get('/owner/:ownerId', async (req, res) => {
             paidAt: payment.paidAt,
             paymentId: payment.paymentId
           });
-          
+
           const paymentDate = payment.paidAt || payment.createdAt || property.createdAt;
-          
+
           allPayments.push({
             _id: payment._id || payment.paymentId,
             propertyId: property._id.toString(),
@@ -637,27 +639,27 @@ router.get('/owner/:ownerId', async (req, res) => {
             razorpayOrderId: payment.orderId || '',
             validUntil: payment.validUntil,
           });
-          
+
           totalAmount += Number(payment.amount || 0);
         });
       } else {
         console.log('   ℹ️ No payment history for this property');
       }
     }
-    
+
     allPayments.sort((a, b) => new Date(b.date) - new Date(a.date));
-    
+
     console.log('✅ Total payments found:', allPayments.length);
     console.log('💰 Total amount:', totalAmount);
     console.log('📜 ==================== HISTORY SUCCESS ====================\n');
-    
+
     res.json({
       success: true,
       payments: allPayments,
       totalPayments: allPayments.length,
       totalAmount: totalAmount
     });
-    
+
   } catch (error) {
     console.error('❌ Error fetching owner payment history:', error);
     console.error('Stack:', error.stack);
@@ -673,44 +675,44 @@ router.get('/owner/:ownerId', async (req, res) => {
 router.post('/create-service-charge-order', async (req, res) => {
   try {
     const { propertyId, ownerId, monthsDuration, couponCode } = req.body;
-    
+
     console.log('💰 ==================== OWNER SERVICE CHARGE ORDER ====================');
     console.log('Property ID:', propertyId);
     console.log('Owner ID:', ownerId);
     console.log('Months Duration:', monthsDuration);
     console.log('Coupon Code:', couponCode || 'None');
-    
+
     if (!propertyId || !ownerId || !monthsDuration) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields: propertyId, ownerId, monthsDuration'
       });
     }
-    
+
     const property = await Property.findById(propertyId);
-    
+
     if (!property) {
       return res.status(404).json({
         success: false,
         message: 'Property not found'
       });
     }
-    
+
     const monthlyCharge = calculateServiceCharge(
-      property.type, 
-      property.beds || property.bedrooms, 
+      property.type,
+      property.beds || property.bedrooms,
       property.bhk
     );
-    
+
     const baseAmount = monthlyCharge * parseInt(monthsDuration);
-    
+
     console.log('💵 Calculation:');
     console.log('   Monthly Charge: ₹' + monthlyCharge);
     console.log('   Months: ' + monthsDuration);
     console.log('   Base Amount: ₹' + baseAmount);
-    
+
     const couponResult = validateAndApplyCoupon(baseAmount, couponCode);
-    
+
     if (!couponResult.valid) {
       return res.status(400).json({
         success: false,
@@ -719,14 +721,14 @@ router.post('/create-service-charge-order', async (req, res) => {
     }
 
     let finalAmount = couponResult.finalAmount;
-    
+
     if (couponResult.couponCode) {
       console.log('🎟️ Coupon Applied:', couponResult.couponCode);
       console.log('💰 Final Amount: ₹' + finalAmount);
     }
-    
+
     const amountInPaise = Math.round(finalAmount * 100);
-    
+
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: 'INR',
@@ -743,10 +745,10 @@ router.post('/create-service-charge-order', async (req, res) => {
         finalAmount: finalAmount,
       },
     });
-    
+
     console.log('✅ Order created:', order.id);
     console.log('💰 ==================== ORDER SUCCESS ====================\n');
-    
+
     res.status(200).json({
       success: true,
       orderId: order.id,
@@ -759,7 +761,7 @@ router.post('/create-service-charge-order', async (req, res) => {
       currency: 'INR',
       key: process.env.RAZORPAY_KEY_ID,
     });
-    
+
   } catch (error) {
     console.error('❌ Error creating service charge order:', error);
     res.status(500).json({
@@ -773,37 +775,37 @@ router.post('/create-service-charge-order', async (req, res) => {
 // ⭐ VERIFY OWNER SERVICE CHARGE PAYMENT - FIXED VERSION
 router.post('/verify-service-charge-payment', async (req, res) => {
   try {
-    const { 
-      razorpay_order_id, 
-      razorpay_payment_id, 
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
       razorpay_signature,
       propertyId,
-      monthsDuration 
+      monthsDuration
     } = req.body;
-    
+
     console.log('🔍 ==================== VERIFY SERVICE CHARGE ====================');
     console.log('Order ID:', razorpay_order_id);
     console.log('Payment ID:', razorpay_payment_id);
     console.log('Property ID:', propertyId);
     console.log('Months Duration:', monthsDuration);
-    
+
     // Verify signature
     const sign = razorpay_order_id + '|' + razorpay_payment_id;
     const expectedSign = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(sign.toString())
       .digest('hex');
-    
+
     if (razorpay_signature !== expectedSign) {
       console.error('❌ Invalid payment signature');
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid signature' 
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid signature'
       });
     }
-    
+
     console.log('✅ Payment signature verified');
-    
+
     // ⭐ Fetch payment details from Razorpay
     const payment = await razorpay.payments.fetch(razorpay_payment_id);
     console.log('💳 Payment details:', {
@@ -811,7 +813,7 @@ router.post('/verify-service-charge-payment', async (req, res) => {
       status: payment.status,
       method: payment.method
     });
-    
+
     if (payment.status !== 'captured' && payment.status !== 'authorized') {
       console.error('❌ Payment not successful. Status:', payment.status);
       return res.status(400).json({
@@ -819,23 +821,23 @@ router.post('/verify-service-charge-payment', async (req, res) => {
         message: 'Payment not completed. Status: ' + payment.status
       });
     }
-    
+
     // ⭐ Get property and update service status
     const property = await Property.findById(propertyId);
-    
+
     if (!property) {
       return res.status(404).json({
         success: false,
         message: 'Property not found'
       });
     }
-    
+
     console.log('📋 Property found:', property.title);
     console.log('📅 Current due date:', property.serviceDueDate);
-    
+
     const totalAmount = payment.amount / 100; // Convert from paise
     const monthsDurationInt = parseInt(monthsDuration);
-    
+
     // ⭐ Record payment using Property model method
     const paymentData = {
       amount: totalAmount,
@@ -843,9 +845,9 @@ router.post('/verify-service-charge-payment', async (req, res) => {
       paymentId: razorpay_payment_id,
       orderId: razorpay_order_id
     };
-    
+
     console.log('💾 Recording service charge payment:', JSON.stringify(paymentData, null, 2));
-    
+
     try {
       await property.recordPayment(paymentData);
       console.log('✅ Service charge payment recorded successfully');
@@ -860,11 +862,11 @@ router.post('/verify-service-charge-payment', async (req, res) => {
         error: saveError.message
       });
     }
-    
+
     console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       paymentId: razorpay_payment_id,
       verified: true,
       newDueDate: property.serviceDueDate,
@@ -872,13 +874,13 @@ router.post('/verify-service-charge-payment', async (req, res) => {
       totalPayments: property.servicePaymentHistory.length,
       message: `Service charge paid for ${monthsDurationInt} month(s)`
     });
-    
+
   } catch (error) {
     console.error('❌ Error verifying service charge payment:', error);
     console.error('Stack:', error.stack);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
@@ -891,24 +893,24 @@ router.post('/verify-service-charge-payment', async (req, res) => {
 router.post('/create-capacity-increase-order', async (req, res) => {
   try {
     const { propertyId, ownerId, additionalCharge, newMonthlyCharge, couponCode } = req.body;
-    
+
     console.log('💰 ==================== CAPACITY INCREASE ORDER ====================');
     console.log('Property ID:', propertyId);
     console.log('Owner ID:', ownerId);
     console.log('Additional Charge:', additionalCharge);
     console.log('New Monthly Charge:', newMonthlyCharge);
     console.log('Coupon Code:', couponCode || 'None');
-    
+
     if (!propertyId || !ownerId || !additionalCharge) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields: propertyId, ownerId, additionalCharge'
       });
     }
-    
+
     // Apply coupon if provided
     const couponResult = validateAndApplyCoupon(additionalCharge, couponCode);
-    
+
     if (!couponResult.valid) {
       return res.status(400).json({
         success: false,
@@ -917,14 +919,14 @@ router.post('/create-capacity-increase-order', async (req, res) => {
     }
 
     let finalAmount = couponResult.finalAmount;
-    
+
     if (couponResult.couponCode) {
       console.log('🎟️ Coupon Applied:', couponResult.couponCode);
       console.log('💰 Final Amount: ₹' + finalAmount);
     }
-    
+
     const amountInPaise = Math.round(finalAmount * 100);
-    
+
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: 'INR',
@@ -940,10 +942,10 @@ router.post('/create-capacity-increase-order', async (req, res) => {
         finalAmount: finalAmount,
       },
     });
-    
+
     console.log('✅ Order created:', order.id);
     console.log('💰 ==================== ORDER SUCCESS ====================\n');
-    
+
     res.status(200).json({
       success: true,
       orderId: order.id,
@@ -955,7 +957,7 @@ router.post('/create-capacity-increase-order', async (req, res) => {
       currency: 'INR',
       key: process.env.RAZORPAY_KEY_ID,
     });
-    
+
   } catch (error) {
     console.error('❌ Error creating capacity increase order:', error);
     res.status(500).json({
@@ -969,39 +971,39 @@ router.post('/create-capacity-increase-order', async (req, res) => {
 // VERIFY CAPACITY INCREASE PAYMENT
 router.post('/verify-capacity-increase-payment', async (req, res) => {
   try {
-    const { 
-      razorpay_order_id, 
-      razorpay_payment_id, 
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
       razorpay_signature,
       propertyId,
       additionalCharge,
       newMonthlyCharge
     } = req.body;
-    
+
     console.log('🔍 ==================== VERIFY CAPACITY INCREASE ====================');
     console.log('Order ID:', razorpay_order_id);
     console.log('Payment ID:', razorpay_payment_id);
     console.log('Property ID:', propertyId);
     console.log('Additional Charge:', additionalCharge);
     console.log('New Monthly Charge:', newMonthlyCharge);
-    
+
     // Verify signature
     const sign = razorpay_order_id + '|' + razorpay_payment_id;
     const expectedSign = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(sign.toString())
       .digest('hex');
-    
+
     if (razorpay_signature !== expectedSign) {
       console.error('❌ Invalid payment signature');
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid signature' 
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid signature'
       });
     }
-    
+
     console.log('✅ Payment signature verified');
-    
+
     // Fetch payment details from Razorpay
     const payment = await razorpay.payments.fetch(razorpay_payment_id);
     console.log('💳 Payment details:', {
@@ -1009,7 +1011,7 @@ router.post('/verify-capacity-increase-payment', async (req, res) => {
       status: payment.status,
       method: payment.method
     });
-    
+
     if (payment.status !== 'captured' && payment.status !== 'authorized') {
       console.error('❌ Payment not successful. Status:', payment.status);
       return res.status(400).json({
@@ -1017,42 +1019,42 @@ router.post('/verify-capacity-increase-payment', async (req, res) => {
         message: 'Payment not completed. Status: ' + payment.status
       });
     }
-    
+
     // Update property with new monthly charge
     const property = await Property.findById(propertyId);
-    
+
     if (!property) {
       return res.status(404).json({
         success: false,
         message: 'Property not found'
       });
     }
-    
+
     console.log('📋 Property found:', property.title);
     console.log('📊 Old monthly charge:', property.monthlyServiceCharge);
     console.log('📊 New monthly charge:', newMonthlyCharge);
-    
+
     // Update the monthly service charge
     property.monthlyServiceCharge = newMonthlyCharge;
     await property.save();
-    
+
     console.log('✅ Property monthly charge updated');
     console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
-    
-    res.json({ 
-      success: true, 
+
+    res.json({
+      success: true,
       paymentId: razorpay_payment_id,
       verified: true,
       newMonthlyCharge: newMonthlyCharge,
       message: 'Capacity increase payment verified and property updated'
     });
-    
+
   } catch (error) {
     console.error('❌ Error verifying capacity increase payment:', error);
     console.error('Stack:', error.stack);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
@@ -1063,31 +1065,31 @@ router.post('/verify-capacity-increase-payment', async (req, res) => {
 
 router.post('/create-booking-order', async (req, res) => {
   try {
-    const { 
-      propertyId, 
-      ownerId, 
-      monthlyRent, 
+    const {
+      propertyId,
+      ownerId,
+      monthlyRent,
       securityDeposit,
       propertyTitle,
-      tenantEmail 
+      tenantEmail
     } = req.body;
-    
+
     console.log('💰 ==================== BOOKING ORDER ====================');
     console.log('Property ID:', propertyId);
     console.log('Monthly Rent:', monthlyRent);
     console.log('Security Deposit:', securityDeposit);
-    
+
     const baseAmount = monthlyRent + securityDeposit;
     const convenienceFee = Math.round((baseAmount * 2.7) / 100);
     const finalAmount = baseAmount + convenienceFee;
-    
+
     console.log('💵 Calculation:');
     console.log('   Base Amount: ₹' + baseAmount);
     console.log('   Convenience Fee (2.7%): +₹' + convenienceFee);
     console.log('   Final Amount: ₹' + finalAmount);
-    
+
     const amountInPaise = Math.round(finalAmount * 100);
-    
+
     const order = await razorpay.orders.create({
       amount: amountInPaise,
       currency: 'INR',
@@ -1103,17 +1105,17 @@ router.post('/create-booking-order', async (req, res) => {
         finalAmount: finalAmount,
       },
     });
-    
+
     console.log('✅ Booking order created:', order.id);
     console.log('💰 ==================== ORDER SUCCESS ====================\n');
-    
+
     res.status(200).json({
       success: true,
       orderId: order.id,
       amount: finalAmount,
       key: process.env.RAZORPAY_KEY_ID,
     });
-    
+
   } catch (error) {
     console.error('❌ Error creating booking order:', error);
     res.status(500).json({
@@ -1132,23 +1134,23 @@ router.post('/create-booking-order', async (req, res) => {
 router.post('/bank-details', async (req, res) => {
   try {
     const { accountHolderName, accountNumber, ifscCode, bankName, branchName, ownerId, email, phone } = req.body;
-    
+
     console.log('🏦 ==================== SAVING BANK DETAILS ====================');
     console.log('Owner ID:', ownerId);
     console.log('IFSC Code received:', ifscCode);
-    
+
     if (!phone || !email || !accountHolderName || !accountNumber || !ifscCode || !ownerId) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
-    
+
     const owner = await User.findById(ownerId);
     if (!owner) {
       return res.status(404).json({ success: false, message: 'Owner not found' });
     }
-    
+
     const ifscUpper = ifscCode.toUpperCase();
     console.log('✅ IFSC Code (uppercase):', ifscUpper);
-    
+
     if (ROUTE_API_AVAILABLE) {
       const contact = await razorpay.contacts.create({
         name: accountHolderName,
@@ -1157,7 +1159,7 @@ router.post('/bank-details', async (req, res) => {
         type: 'vendor',
         reference_id: owner._id.toString(),
       });
-      
+
       const fundAccount = await razorpay.fundAccount.create({
         contact_id: contact.id,
         account_type: 'bank_account',
@@ -1167,7 +1169,7 @@ router.post('/bank-details', async (req, res) => {
           account_number: accountNumber,
         },
       });
-      
+
       // ⭐ FIX: Save as "ifsc" to match the User model schema
       await User.findByIdAndUpdate(owner._id, {
         $set: {
@@ -1186,22 +1188,22 @@ router.post('/bank-details', async (req, res) => {
           },
         },
       });
-      
+
       console.log('✅ Bank details saved with IFSC:', ifscUpper);
       console.log('🏦 ==================== SAVE SUCCESS ====================\n');
-      
+
       return res.status(200).json({
         success: true,
         message: 'Bank details saved successfully',
-        data: { 
-          contactId: contact.id, 
-          fundAccountId: fundAccount.id, 
+        data: {
+          contactId: contact.id,
+          fundAccountId: fundAccount.id,
           autoTransferEnabled: true,
           ifscCode: ifscUpper // Return as ifscCode for frontend compatibility
         },
       });
     }
-    
+
     // ⭐ FIX: Save as "ifsc" even without Razorpay Route API
     await User.findByIdAndUpdate(owner._id, {
       $set: {
@@ -1218,19 +1220,19 @@ router.post('/bank-details', async (req, res) => {
         },
       },
     });
-    
+
     console.log('✅ Bank details saved with IFSC:', ifscUpper);
     console.log('🏦 ==================== SAVE SUCCESS ====================\n');
-    
+
     return res.status(200).json({
       success: true,
       message: 'Bank details saved successfully',
-      data: { 
+      data: {
         autoTransferEnabled: false,
         ifscCode: ifscUpper // Return as ifscCode for frontend compatibility
       },
     });
-    
+
   } catch (error) {
     console.error('❌ Error in /bank-details:', error);
     return res.status(500).json({ success: false, message: 'Failed to save bank details', error: error.message });
@@ -1242,21 +1244,21 @@ router.get('/bank-details/:ownerId', async (req, res) => {
   try {
     console.log('🏦 ==================== RETRIEVING BANK DETAILS ====================');
     console.log('Owner ID:', req.params.ownerId);
-    
+
     const owner = await User.findById(req.params.ownerId);
-    
+
     if (!owner || !owner.bankDetails) {
       console.log('⚠️ No bank details found');
       return res.status(404).json({ success: false, message: 'No bank details found' });
     }
-    
+
     console.log('📋 Bank Details Object:', owner.bankDetails);
     console.log('🔑 IFSC field value:', owner.bankDetails.ifsc); // ⭐ Using "ifsc"
-    
+
     const maskedAccountNumber = owner.bankDetails.accountNumber
       ? `****${owner.bankDetails.accountNumber.slice(-4)}`
       : null;
-    
+
     // ⭐ FIX: Read from "ifsc" field, return as "ifscCode" for frontend
     const responseData = {
       accountHolderName: owner.bankDetails.accountHolderName,
@@ -1269,10 +1271,10 @@ router.get('/bank-details/:ownerId', async (req, res) => {
       hasRazorpayLinked: !!(owner.razorpayContactId && owner.razorpayFundAccountId),
       autoTransferEnabled: !!(owner.razorpayFundAccountId),
     };
-    
+
     console.log('✅ Returning IFSC Code:', responseData.ifscCode);
     console.log('🏦 ==================== RETRIEVE SUCCESS ====================\n');
-    
+
     res.json({
       success: true,
       data: responseData,
@@ -1291,11 +1293,11 @@ router.post('/create-order', async (req, res) => {
     const { propertyType, beds, bhk, propertyTitle, couponCode } = req.body;
     const originalAmount = calculateServiceCharge(propertyType, beds, bhk);
     const couponResult = validateAndApplyCoupon(originalAmount, couponCode);
-    
+
     if (!couponResult.valid) {
       return res.status(400).json({ success: false, message: couponResult.error });
     }
-    
+
     const order = await razorpay.orders.create({
       amount: Math.round(couponResult.finalAmount * 100),
       currency: 'INR',
@@ -1307,7 +1309,7 @@ router.post('/create-order', async (req, res) => {
         finalAmount: couponResult.finalAmount,
       },
     });
-    
+
     res.status(200).json({
       success: true,
       orderId: order.id,
@@ -1324,16 +1326,16 @@ router.post('/verify-payment', async (req, res) => {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, propertyData } = req.body;
     const sign = razorpay_order_id + '|' + razorpay_payment_id;
     const expectedSign = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(sign.toString()).digest('hex');
-    
+
     if (razorpay_signature === expectedSign) {
       console.log('✅ Payment verified for property addition');
       console.log('💰 Property Data:', propertyData);
-      
+
       // ⭐ Store payment info in user's temporary field for linking after property upload
       if (propertyData && propertyData.ownerId) {
         try {
           const payment = await razorpay.payments.fetch(razorpay_payment_id);
-          
+
           // Save to owner's temporary payment data
           await User.findByIdAndUpdate(propertyData.ownerId, {
             $set: {
@@ -1348,13 +1350,13 @@ router.post('/verify-payment', async (req, res) => {
               }
             }
           });
-          
+
           console.log('💾 Payment saved temporarily for owner');
         } catch (saveError) {
           console.error('⚠️ Could not save temporary payment:', saveError.message);
         }
       }
-      
+
       res.json({ success: true, paymentId: razorpay_payment_id, verified: true });
     } else {
       res.status(400).json({ success: false, message: 'Invalid signature' });
@@ -1384,7 +1386,7 @@ router.get('/test-razorpay', async (req, res) => {
 router.get('/debug/all-bookings', async (req, res) => {
   try {
     const allBookings = await Booking.find({}).limit(10);
-    
+
     const bookingSummary = allBookings.map(booking => ({
       _id: booking._id,
       tenantEmail: booking.tenantEmail,
@@ -1396,13 +1398,13 @@ router.get('/debug/all-bookings', async (req, res) => {
       totalPaymentsInHistory: booking.rentPaymentHistory?.length || 0,
       paymentHistory: booking.rentPaymentHistory || []
     }));
-    
+
     res.json({
       success: true,
       totalBookings: allBookings.length,
       bookings: bookingSummary
     });
-    
+
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1444,4 +1446,73 @@ router.post('/verify-due-payment', async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 });
+
+// ========================================
+// ⭐ NEW: IN-APP NOTIFICATION ROUTES
+// Populated automatically by utils/paymentReminderCron.js (runs daily 9AM IST)
+// ========================================
+
+// GET all notifications for a tenant (used by AllNoticesScreen)
+router.get('/notifications/:tenantEmail', async (req, res) => {
+  try {
+    const { tenantEmail } = req.params;
+
+    if (!tenantEmail || tenantEmail.trim() === '') {
+      return res.status(400).json({ success: false, message: 'tenantEmail parameter is required' });
+    }
+
+    console.log('🔔 Fetching notifications for:', tenantEmail);
+
+    const notifications = await Notification.find({
+      tenantEmail: tenantEmail.trim().toLowerCase(),
+    }).sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      notifications,
+      unreadCount: notifications.filter(n => !n.isRead).length,
+    });
+  } catch (error) {
+    console.error('❌ Error fetching notifications:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// PATCH mark one notification as read
+router.patch('/notifications/:id/read', async (req, res) => {
+  try {
+    const updated = await Notification.findByIdAndUpdate(
+      req.params.id,
+      { isRead: true },
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ success: false, message: 'Notification not found' });
+    }
+
+    res.json({ success: true, notification: updated });
+  } catch (error) {
+    console.error('❌ Error marking notification as read:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// PATCH mark all notifications as read for a tenant
+router.patch('/notifications/:tenantEmail/read-all', async (req, res) => {
+  try {
+    const { tenantEmail } = req.params;
+
+    await Notification.updateMany(
+      { tenantEmail: tenantEmail.trim().toLowerCase() },
+      { isRead: true }
+    );
+
+    res.json({ success: true, message: 'All notifications marked as read' });
+  } catch (error) {
+    console.error('❌ Error marking all notifications as read:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router;
