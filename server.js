@@ -4,6 +4,7 @@
 // ✅ Includes property status checking
 // ✅ Auto-suspend overdue properties
 // ✅ Property view tracking for Lead Tracker
+// ⭐ NEW: In-app payment due reminders (7 days before rent due)
 // ========================================
 
 const express = require('express');
@@ -14,6 +15,9 @@ require('dotenv').config();
 
 // ⭐ Import property status cron job
 const { startPropertyStatusCron, runPropertyStatusCheck } = require('./utils/propertyStatusCron');
+
+// ⭐ NEW: Import payment reminder cron job
+const { startPaymentReminderCron, runPaymentReminderCheck } = require('./utils/paymentReminderCron');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -38,6 +42,10 @@ mongoose
     // Start property status cron job after DB connection
     console.log('🕒 Starting property status monitoring...');
     startPropertyStatusCron();
+
+    // ⭐ NEW: Start payment reminder cron job after DB connection
+    console.log('🔔 Starting payment reminder monitoring...');
+    startPaymentReminderCron();
   })
   .catch((err) => {
     console.error('❌ MongoDB connection error:', err);
@@ -58,6 +66,7 @@ app.get('/', (req, res) => {
       'Monthly Subscription (Auto-renewal)',
       'Property Status Monitoring (Cron Job)',
       'Property View Tracking (Lead Tracker)',
+      'In-App Payment Due Reminders (Cron Job)', // ⭐ NEW
     ],
     routes: [
       'GET /',
@@ -72,6 +81,10 @@ app.get('/', (req, res) => {
       'GET /api/payments/service-status/:propertyId',
       'GET /api/payments/owner-service-status/:ownerId',
       'GET /api/admin/check-property-status (Manual trigger)',
+      'GET /api/admin/check-payment-reminders (Manual trigger)', // ⭐ NEW
+      'GET /api/payments/notifications/:tenantEmail', // ⭐ NEW
+      'PATCH /api/payments/notifications/:id/read', // ⭐ NEW
+      'PATCH /api/payments/notifications/:tenantEmail/read-all', // ⭐ NEW
     ],
   });
 });
@@ -116,6 +129,26 @@ app.get('/api/admin/check-property-status', async (req, res) => {
   }
 });
 
+// ⭐ NEW: Admin: Manual payment reminder check -------------------
+app.get('/api/admin/check-payment-reminders', async (req, res) => {
+  try {
+    console.log('🔧 Manual payment reminder check triggered...');
+    const result = await runPaymentReminderCheck();
+    res.json({
+      success: true,
+      message: 'Payment reminder check completed',
+      ...result,
+    });
+  } catch (error) {
+    console.error('❌ Manual check failed:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to run payment reminder check',
+      error: error.message,
+    });
+  }
+});
+
 // ------------------- 404 Handler -------------------
 app.use((req, res) => {
   console.log(`❌ 404 - Route not found: ${req.method} ${req.url}`);
@@ -154,6 +187,7 @@ app.listen(PORT, () => {
   console.log(`📍 Server: http://localhost:${PORT}`);
   console.log(`🗄️  MongoDB: ${mongoose.connection.readyState === 1 ? 'Connected ✅' : 'Connecting... ⏳'}`);
   console.log(`🕒 Cron Job: Active (Daily at 2:00 AM) ✅`);
+  console.log(`🔔 Payment Reminder Cron: Active (Daily at 9:00 AM) ✅`); // ⭐ NEW
   console.log('========================================');
   console.log('\n✨ Features Active:');
   console.log('  - Property Management');
@@ -162,8 +196,10 @@ app.listen(PORT, () => {
   console.log('  - Monthly Subscription');
   console.log('  - Auto-suspend Overdue Properties');
   console.log('  - Property View Tracking (Lead Tracker)');
+  console.log('  - In-App Payment Due Reminders'); // ⭐ NEW
   console.log('\n📋 Manual Trigger:');
   console.log(`  GET http://localhost:${PORT}/api/admin/check-property-status`);
+  console.log(`  GET http://localhost:${PORT}/api/admin/check-payment-reminders`); // ⭐ NEW
   console.log('========================================\n');
 });
 
