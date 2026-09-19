@@ -248,14 +248,20 @@ const bookingSchema = new mongoose.Schema(
 
 // ⭐ NEW: per-tenancy agreement (separate from Property.agreementUrl)
   agreementUrl: {
-    type: String,
-    default: null
-  },
+  type: String,
+  default: null
+},
 
-  agreementGeneratedAt: {
-    type: Date,
-    default: null
-  }
+agreementGeneratedAt: {
+  type: Date,
+  default: null
+},
+
+// ⭐ NEW: tenant's manually-uploaded signed scan (separate from the auto-generated PDF above)
+signedAgreementUrl: {
+  type: String,
+  default: null
+}
 },
   {
     timestamps: true,
