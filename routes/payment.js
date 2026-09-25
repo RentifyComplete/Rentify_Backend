@@ -675,93 +675,83 @@ router.get('/owner/:ownerId', async (req, res) => {
 router.post('/create-service-charge-order', async (req, res) => {
   try {
     const { propertyId, ownerId, monthsDuration, couponCode } = req.body;
-
+    const months = parseInt(monthsDuration, 10);
+ 
     console.log('💰 ==================== OWNER SERVICE CHARGE ORDER ====================');
-    console.log('Property ID:', propertyId);
-    console.log('Owner ID:', ownerId);
-    console.log('Months Duration:', monthsDuration);
-    console.log('Coupon Code:', couponCode || 'None');
-
-    if (!propertyId || !ownerId || !monthsDuration) {
+    console.log('Property ID:', propertyId, '| Owner ID:', ownerId, '| Months:', months);
+ 
+    if (!propertyId || !ownerId || !months) {
       return res.status(400).json({
         success: false,
         message: 'Missing required fields: propertyId, ownerId, monthsDuration'
       });
     }
-
-    const property = await Property.findById(propertyId);
-
-    if (!property) {
-      return res.status(404).json({
-        success: false,
-        message: 'Property not found'
-      });
-    }
-
-    const monthlyCharge = calculateServiceCharge(
-      property.type,
-      property.beds || property.bedrooms,
-      property.bhk
-    );
-
-    const baseAmount = monthlyCharge * parseInt(monthsDuration);
-
-    console.log('💵 Calculation:');
-    console.log('   Monthly Charge: ₹' + monthlyCharge);
-    console.log('   Months: ' + monthsDuration);
-    console.log('   Base Amount: ₹' + baseAmount);
-
-    const couponResult = validateAndApplyCoupon(baseAmount, couponCode);
-
-    if (!couponResult.valid) {
+ 
+    if (months < 1 || months > 12) {
       return res.status(400).json({
         success: false,
-        message: couponResult.error,
+        message: 'monthsDuration must be between 1 and 12'
       });
     }
-
-    let finalAmount = couponResult.finalAmount;
-
-    if (couponResult.couponCode) {
-      console.log('🎟️ Coupon Applied:', couponResult.couponCode);
-      console.log('💰 Final Amount: ₹' + finalAmount);
+ 
+    const property = await Property.findById(propertyId);
+ 
+    if (!property) {
+      return res.status(404).json({ success: false, message: 'Property not found' });
     }
-
-    const amountInPaise = Math.round(finalAmount * 100);
-
+ 
+    if (String(property.ownerId) !== String(ownerId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'This property does not belong to this owner'
+      });
+    }
+ 
+    // ⭐ Single source of truth for the monthly charge
+    const monthlyCharge = property.calculateServiceCharge();
+    const baseAmount = monthlyCharge * months;
+ 
+    const couponResult = validateAndApplyCoupon(baseAmount, couponCode);
+    if (!couponResult.valid) {
+      return res.status(400).json({ success: false, message: couponResult.error });
+    }
+ 
+    const finalAmount = couponResult.finalAmount;
+    console.log(`💵 ₹${monthlyCharge} × ${months} = ₹${baseAmount} → final ₹${finalAmount}`);
+ 
     const order = await razorpay.orders.create({
-      amount: amountInPaise,
+      amount: Math.round(finalAmount * 100),
       currency: 'INR',
       receipt: `svc_${Date.now()}`.substring(0, 40),
       notes: {
         type: 'owner_service_charge',
-        propertyId: propertyId,
-        ownerId: ownerId,
-        monthsDuration: monthsDuration,
-        monthlyCharge: monthlyCharge,
-        baseAmount: baseAmount,
+        propertyId: String(property._id),
+        ownerId: String(ownerId),
+        monthsDuration: String(months),
+        monthlyCharge: String(monthlyCharge),
+        baseAmount: String(baseAmount),
         couponCode: couponResult.couponCode || 'none',
-        couponDiscount: couponResult.discount || 0,
-        finalAmount: finalAmount,
+        couponDiscount: String(couponResult.discount || 0),
+        finalAmount: String(finalAmount),
       },
     });
-
+ 
     console.log('✅ Order created:', order.id);
-    console.log('💰 ==================== ORDER SUCCESS ====================\n');
-
+ 
     res.status(200).json({
       success: true,
       orderId: order.id,
       amount: finalAmount,
-      baseAmount: baseAmount,
+      baseAmount,
+      monthlyCharge,
       couponDiscount: couponResult.discount || 0,
       couponPercent: couponResult.discountPercent || 0,
       couponCode: couponResult.couponCode,
-      monthsDuration: monthsDuration,
+      monthsDuration: months,
+      propertyId: String(property._id),
       currency: 'INR',
       key: process.env.RAZORPAY_KEY_ID,
     });
-
   } catch (error) {
     console.error('❌ Error creating service charge order:', error);
     res.status(500).json({
@@ -771,117 +761,103 @@ router.post('/create-service-charge-order', async (req, res) => {
     });
   }
 });
-
-// ⭐ VERIFY OWNER SERVICE CHARGE PAYMENT - FIXED VERSION
+ 
+// VERIFY OWNER SERVICE CHARGE PAYMENT (credits ONLY the property on the order)
 router.post('/verify-service-charge-payment', async (req, res) => {
   try {
-    const {
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
-      propertyId,
-      monthsDuration
-    } = req.body;
-
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+ 
     console.log('🔍 ==================== VERIFY SERVICE CHARGE ====================');
-    console.log('Order ID:', razorpay_order_id);
-    console.log('Payment ID:', razorpay_payment_id);
-    console.log('Property ID:', propertyId);
-    console.log('Months Duration:', monthsDuration);
-
-    // Verify signature
-    const sign = razorpay_order_id + '|' + razorpay_payment_id;
+    console.log('Order ID:', razorpay_order_id, '| Payment ID:', razorpay_payment_id);
+ 
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ success: false, message: 'Missing Razorpay fields' });
+    }
+ 
+    // 1) Signature
     const expectedSign = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-      .update(sign.toString())
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
-
+ 
     if (razorpay_signature !== expectedSign) {
       console.error('❌ Invalid payment signature');
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid signature'
-      });
+      return res.status(400).json({ success: false, message: 'Invalid signature' });
     }
-
-    console.log('✅ Payment signature verified');
-
-    // ⭐ Fetch payment details from Razorpay
-    const payment = await razorpay.payments.fetch(razorpay_payment_id);
-    console.log('💳 Payment details:', {
-      amount: payment.amount,
-      status: payment.status,
-      method: payment.method
-    });
-
+ 
+    // 2) Fetch order + payment from Razorpay (trusted data)
+    const [order, payment] = await Promise.all([
+      razorpay.orders.fetch(razorpay_order_id),
+      razorpay.payments.fetch(razorpay_payment_id),
+    ]);
+ 
+    if (payment.order_id !== razorpay_order_id) {
+      return res.status(400).json({ success: false, message: 'Payment does not belong to this order' });
+    }
+ 
     if (payment.status !== 'captured' && payment.status !== 'authorized') {
-      console.error('❌ Payment not successful. Status:', payment.status);
       return res.status(400).json({
         success: false,
         message: 'Payment not completed. Status: ' + payment.status
       });
     }
-
-    // ⭐ Get property and update service status
-    const property = await Property.findById(propertyId);
-
-    if (!property) {
-      return res.status(404).json({
-        success: false,
-        message: 'Property not found'
-      });
+ 
+    const notes = order.notes || {};
+    if (notes.type !== 'owner_service_charge' || !notes.propertyId) {
+      return res.status(400).json({ success: false, message: 'Not a service charge order' });
     }
-
-    console.log('📋 Property found:', property.title);
-    console.log('📅 Current due date:', property.serviceDueDate);
-
-    const totalAmount = payment.amount / 100; // Convert from paise
-    const monthsDurationInt = parseInt(monthsDuration);
-
-    // ⭐ Record payment using Property model method
-    const paymentData = {
-      amount: totalAmount,
-      monthsPaid: monthsDurationInt,
-      paymentId: razorpay_payment_id,
-      orderId: razorpay_order_id
-    };
-
-    console.log('💾 Recording service charge payment:', JSON.stringify(paymentData, null, 2));
-
+ 
+    // ⭐ propertyId and months come from the ORDER, not the request body
+    const propertyId = notes.propertyId;
+    const monthsPaid = parseInt(notes.monthsDuration, 10);
+ 
+    if (req.body.propertyId && String(req.body.propertyId) !== String(propertyId)) {
+      console.warn('⚠️ App sent a different propertyId than the order. Using the order:', propertyId);
+    }
+ 
+    if (!monthsPaid || monthsPaid < 1) {
+      return res.status(400).json({ success: false, message: 'Invalid months on order' });
+    }
+ 
+    // 3) Credit only this property
+    const property = await Property.findById(propertyId);
+    if (!property) {
+      return res.status(404).json({ success: false, message: 'Property not found' });
+    }
+ 
+    console.log('📋 Property:', property.title, '| Current due:', property.serviceDueDate);
+ 
     try {
-      await property.recordPayment(paymentData);
-      console.log('✅ Service charge payment recorded successfully');
-      console.log('📅 New due date:', property.serviceDueDate);
-      console.log('📊 Total payments in history:', property.servicePaymentHistory.length);
+      await property.recordPayment({
+        amount: payment.amount / 100,
+        monthsPaid,
+        paymentId: razorpay_payment_id,
+        orderId: razorpay_order_id,
+      });
     } catch (saveError) {
       console.error('❌ Error saving payment:', saveError);
-      console.error('Stack:', saveError.stack);
       return res.status(500).json({
         success: false,
         message: 'Payment verified but failed to update property',
         error: saveError.message
       });
     }
-
-    console.log('🔍 ==================== VERIFY SUCCESS ====================\n');
-
+ 
+    console.log('✅ New due date for', property.title, ':', property.serviceDueDate);
+ 
     res.json({
       success: true,
       paymentId: razorpay_payment_id,
       verified: true,
+      propertyId: String(property._id),
       newDueDate: property.serviceDueDate,
       status: property.serviceStatus,
       totalPayments: property.servicePaymentHistory.length,
-      message: `Service charge paid for ${monthsDurationInt} month(s)`
+      message: `Service charge paid for ${monthsPaid} month(s)`
     });
-
   } catch (error) {
     console.error('❌ Error verifying service charge payment:', error);
-    console.error('Stack:', error.stack);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
