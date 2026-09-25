@@ -3,36 +3,49 @@
 // File: models/Property.js
 // ✅ Added 'rooms' field for PG properties
 // ✅ Added agreement fields
-// ✅ Monthly service charge tracking
+// ✅ Monthly service charge tracking (PER PROPERTY)
 // ✅ Payment history with proper validation
+// ✅ FIX: Month-end safe due-date math (Jan 31 + 1 month = Feb 28/29, not Mar 3)
+// ✅ FIX: Same Razorpay payment can never be recorded twice
 // ========================================
 
 const mongoose = require('mongoose');
 
+// ⭐ Adds months without overflowing into the next month
+function addMonthsClamped(date, months) {
+  const d = new Date(date);
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + months);
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDay));
+  return d;
+}
+
 // ⭐ Define payment history subdocument schema explicitly
 const paymentHistorySchema = new mongoose.Schema({
-  amount: { 
-    type: Number, 
+  amount: {
+    type: Number,
     required: [true, 'Payment amount is required']
   },
-  monthsPaid: { 
-    type: Number, 
+  monthsPaid: {
+    type: Number,
     required: [true, 'Months paid is required']
   },
-  paidAt: { 
-    type: Date, 
-    default: Date.now 
+  paidAt: {
+    type: Date,
+    default: Date.now
   },
-  paymentId: { 
+  paymentId: {
     type: String,
     default: ''
   },
-  orderId: { 
+  orderId: {
     type: String,
     default: ''
   },
-  validUntil: { 
-    type: Date 
+  validUntil: {
+    type: Date
   },
   status: {
     type: String,
@@ -61,8 +74,8 @@ const propertySchema = new mongoose.Schema(
     rating: { type: Number, default: 4.5 },
     isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
-    
-    // ⭐⭐⭐ NEW FIELDS FOR AGREEMENTS ⭐⭐⭐
+
+    // ⭐⭐⭐ AGREEMENT FIELDS ⭐⭐⭐
     ownerName: {
       type: String,
       default: null
@@ -79,21 +92,21 @@ const propertySchema = new mongoose.Schema(
       type: Date,
       default: null
     },
-    // ⭐⭐⭐ END NEW FIELDS ⭐⭐⭐
-    
-    // ⭐ Service Charge/Subscription Fields
-    serviceDueDate: { 
-      type: Date, 
-      default: function() {
-        return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+    // ⭐ Service Charge/Subscription Fields (each property has its own)
+    serviceDueDate: {
+      type: Date,
+      default: function () {
+        // First month free, counted from when THIS property is created
+        return addMonthsClamped(new Date(), 1);
       }
     },
-    serviceStatus: { 
-      type: String, 
+    serviceStatus: {
+      type: String,
       enum: ['active', 'due', 'overdue', 'suspended'],
       default: 'active'
     },
-    lastServicePayment: { 
+    lastServicePayment: {
       type: Date,
       default: Date.now
     },
@@ -103,13 +116,13 @@ const propertySchema = new mongoose.Schema(
       default: 18
     },
     servicePaymentHistory: [paymentHistorySchema],
-    gracePeriodEndsAt: { 
+    gracePeriodEndsAt: {
       type: Date,
       default: null
     },
-    autoRenewal: { 
-      type: Boolean, 
-      default: false 
+    autoRenewal: {
+      type: Boolean,
+      default: false
     },
     suspendedAt: {
       type: Date,
@@ -128,12 +141,13 @@ const propertySchema = new mongoose.Schema(
 // ========================================
 
 // ⭐ METHOD: Calculate service charge based on property type
-propertySchema.methods.calculateServiceCharge = function() {
+// This is the ONE place the monthly charge is calculated — routes use it too.
+propertySchema.methods.calculateServiceCharge = function () {
   const RATE_PER_UNIT = 18;
   let charge = RATE_PER_UNIT;
-  
+
   if (this.type === 'PG') {
-    // ⭐ FIXED: Prioritize 'rooms' over 'beds' for PG
+    // Prioritize 'rooms' over 'beds' for PG
     if (this.rooms) {
       charge = this.rooms * RATE_PER_UNIT;
     } else if (this.beds) {
@@ -147,21 +161,21 @@ propertySchema.methods.calculateServiceCharge = function() {
       }
     }
   }
-  
+
   return Math.max(charge, RATE_PER_UNIT);
 };
 
 // ⭐ METHOD: Check if payment is due/overdue
-propertySchema.methods.getPaymentStatus = function() {
+propertySchema.methods.getPaymentStatus = function () {
   const now = new Date();
   const dueDate = this.serviceDueDate;
-  
+
   if (!dueDate) {
     return 'active';
   }
-  
+
   const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
-  
+
   if (daysUntilDue > 15) {
     return 'active';
   } else if (daysUntilDue > 0) {
@@ -173,73 +187,64 @@ propertySchema.methods.getPaymentStatus = function() {
   }
 };
 
-// ⭐ METHOD: Update payment and extend service date
-propertySchema.methods.recordPayment = async function(paymentData) {
+// ⭐ METHOD: Record a payment for THIS property and extend only its due date
+propertySchema.methods.recordPayment = async function (paymentData) {
   console.log('🔍 recordPayment called with:', JSON.stringify(paymentData, null, 2));
-  
+
   if (!paymentData.amount || !paymentData.monthsPaid) {
     throw new Error(`Missing required fields: amount=${paymentData.amount}, monthsPaid=${paymentData.monthsPaid}`);
   }
-  
+
   const amount = Number(paymentData.amount);
   const monthsPaid = Number(paymentData.monthsPaid);
   const paymentId = String(paymentData.paymentId || '');
   const orderId = String(paymentData.orderId || '');
-  
-  console.log('💰 Validated amount:', amount);
-  console.log('📅 Validated monthsPaid:', monthsPaid);
-  
+
   if (isNaN(amount) || isNaN(monthsPaid) || amount <= 0 || monthsPaid <= 0) {
     throw new Error(`Invalid payment data: amount=${amount}, monthsPaid=${monthsPaid}`);
   }
-  
-  const currentDueDate = this.serviceDueDate || new Date();
+
+  // ⭐ FIX: Never record the same Razorpay payment twice
+  // (e.g. app retries verify after a timeout → due date would be extended twice)
+  if (paymentId && this.servicePaymentHistory.some(p => p.paymentId === paymentId)) {
+    console.log('ℹ️ Payment already recorded, skipping:', paymentId);
+    return this;
+  }
+
+  // Paid early → extend from current due date (no lost days)
+  // Paid late  → extend from today
   const now = new Date();
+  const currentDueDate = this.serviceDueDate || now;
   const baseDate = currentDueDate > now ? currentDueDate : now;
-  
-  const newDueDate = new Date(
-    baseDate.getFullYear(),
-    baseDate.getMonth() + monthsPaid,
-    baseDate.getDate(),
-    baseDate.getHours(),
-    baseDate.getMinutes(),
-    baseDate.getSeconds()
-  );
-  
+
+  // ⭐ FIX: month-end safe
+  const newDueDate = addMonthsClamped(baseDate, monthsPaid);
+
   console.log('📅 Base date:', baseDate);
   console.log('📅 New due date:', newDueDate);
-  
-  const validUntil = new Date(newDueDate);
-  
-  const paymentEntry = {
-    amount: amount,
-    monthsPaid: monthsPaid,
-    paidAt: new Date(),
-    paymentId: paymentId,
-    orderId: orderId,
-    validUntil: validUntil,
+
+  this.servicePaymentHistory.push({
+    amount,
+    monthsPaid,
+    paidAt: now,
+    paymentId,
+    orderId,
+    validUntil: new Date(newDueDate),
     status: 'completed'
-  };
-  
-  console.log('💾 Payment entry to save:', JSON.stringify(paymentEntry, null, 2));
-  
-  this.servicePaymentHistory.push(paymentEntry);
-  
+  });
+
   this.serviceDueDate = newDueDate;
   this.serviceStatus = 'active';
-  this.lastServicePayment = new Date();
+  this.lastServicePayment = now;
   this.isActive = true;
   this.gracePeriodEndsAt = null;
   this.suspendedAt = null;
   this.suspensionReason = null;
-  
-  console.log('✅ Property updated, saving...');
-  
+
   const saved = await this.save();
-  
-  console.log('✅ Property saved successfully');
-  console.log('📊 Verified payment count:', saved.servicePaymentHistory.length);
-  
+
+  console.log('✅ Property saved. Payments in history:', saved.servicePaymentHistory.length);
+
   return saved;
 };
 
@@ -247,22 +252,20 @@ propertySchema.methods.recordPayment = async function(paymentData) {
 // STATIC METHODS
 // ========================================
 
-propertySchema.statics.findPropertiesNeedingUpdate = async function() {
+propertySchema.statics.findPropertiesNeedingUpdate = async function () {
   const now = new Date();
-  
-  const properties = await this.find({
+
+  return this.find({
     serviceDueDate: { $lt: now },
     serviceStatus: { $ne: 'suspended' }
   });
-  
-  return properties;
 };
 
-propertySchema.statics.suspendOverdueProperties = async function() {
+propertySchema.statics.suspendOverdueProperties = async function () {
   const now = new Date();
   const gracePeriodEnd = new Date(now);
   gracePeriodEnd.setDate(gracePeriodEnd.getDate() - 10);
-  
+
   const result = await this.updateMany(
     {
       serviceDueDate: { $lt: gracePeriodEnd },
@@ -279,19 +282,19 @@ propertySchema.statics.suspendOverdueProperties = async function() {
       }
     }
   );
-  
+
   console.log(`⏸️ Suspended ${result.modifiedCount} properties for non-payment`);
   return result;
 };
 
-propertySchema.statics.updateAllStatuses = async function() {
+propertySchema.statics.updateAllStatuses = async function () {
   console.log('🔄 Updating all property statuses...');
-  
+
   const now = new Date();
-  
+
   await this.updateMany(
     {
-      serviceDueDate: { 
+      serviceDueDate: {
         $lte: new Date(now.getTime() + 15 * 24 * 60 * 60 * 1000),
         $gt: now
       },
@@ -299,7 +302,7 @@ propertySchema.statics.updateAllStatuses = async function() {
     },
     { $set: { serviceStatus: 'due' } }
   );
-  
+
   await this.updateMany(
     {
       serviceDueDate: { $lt: now },
@@ -307,9 +310,9 @@ propertySchema.statics.updateAllStatuses = async function() {
     },
     { $set: { serviceStatus: 'overdue' } }
   );
-  
+
   await this.suspendOverdueProperties();
-  
+
   console.log('✅ All property statuses updated');
 };
 
